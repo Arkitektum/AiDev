@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+# aidev — start Docker (if needed), then run claude-docker in the
+# project directory configured for the named app.
+#
+# Usage: aidev <app-name> [-r|--resume]
+# Config: ${XDG_CONFIG_HOME:-~/.config}/aidev/apps.conf
+#         one entry per line, format: name=/absolute/path
+
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/aidev"
+CONFIG_FILE="$CONFIG_DIR/apps.conf"
+USAGE_FILE="$CONFIG_DIR/usage.conf"
+DOCKER_WAIT_SECONDS=120
+
+die() { printf 'aidev: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<EOF
+Usage:
+  aidev [-r|--resume]       Show an interactive picker of registered apps,
+                            then run the same flow as 'aidev <app-name>'.
+  aidev <app-name> [-r|--resume]
+                            Start Docker Desktop (if needed) and run
+                            'claude-docker' in the project directory
+                            registered for <app-name>. Prompts to register
+                            <app-name> if it is unknown. With -r/--resume,
+                            forwards --resume to claude-docker so you can
+                            pick a previous Claude session.
+  aidev remove <app-name>   Remove an app from the config.
+  aidev -h | --help         Show this help.
+
+Config file: $CONFIG_FILE
+  Format:    one 'name=/absolute/path' entry per line.
+
+Note: 'remove' and 'help' are reserved and cannot be used as app names.
+EOF
+    exit "${1:-1}"
+}
+
+ensure_config() {
+    mkdir -p "$CONFIG_DIR"
+    [ -f "$CONFIG_FILE" ] || : > "$CONFIG_FILE"
+}
+
+lookup_app() {
+    # Case-insensitive match. Echoes the stored path (config preserves
+    # whatever case the user used at registration).
+    local name="$1"
+    awk -F= -v key="$name" 'tolower($1) == tolower(key) { sub(/^[^=]*=/, ""); print; exit }' "$CONFIG_FILE"
+}
+
+canonical_name() {
+    # Case-insensitive match. Echoes the name as stored in the config.
+    local name="$1"
+    awk -F= -v key="$name" 'tolower($1) == tolower(key) { print $1; exit }' "$CONFIG_FILE"
+}
+
+sorted_apps() {
+    # Emit apps.conf entries ordered by most-recent usage first, falling
+    # back to original file order for apps without a recorded timestamp.
+    local usage="$USAGE_FILE"
+    awk -F= -v usage="$usage" '
+        BEGIN {
+            while ((getline line < usage) > 0) {
+                n = split(line, f, "=")
+                if (n >= 2) ts[tolower(f[1])] = f[2] + 0
+            }
+            close(usage)
+        }
+        {
+            key = tolower($1)
+            t = (key in ts) ? ts[key] : 0
+            printf "%d\t%d\t%s\n", t, NR, $0
+        }
+    ' "$CONFIG_FILE" \
+    | sort -t$'\t' -k1,1nr -k2,2n \
+    | cut -f3-
+}
+
+record_usage() {
+    # Upsert "<name>=<unix-time>" in USAGE_FILE (case-insensitive on name).
+    local name="$1" tmp now
+    now="$(date +%s)"
+    mkdir -p "$CONFIG_DIR"
+    tmp="$(mktemp "${USAGE_FILE}.XXXXXX")"
+    if [ -f "$USAGE_FILE" ]; then
+        awk -F= -v key="$name" 'tolower($1) != tolower(key)' "$USAGE_FILE" > "$tmp"
+    fi
+    printf '%s=%s\n' "$name" "$now" >> "$tmp"
+    mv "$tmp" "$USAGE_FILE"
+}
+
+validate_app_name() {
+    local name="$1"
+    case "$name" in
+        ''|*=*|*/*|*[[:space:]]*) die "Invalid app name: '$name'" ;;
+    esac
+    case "${name,,}" in
+        remove|help|-h|--help) die "'$name' is reserved and cannot be used as an app name." ;;
+    esac
+}
+
+register_app() {
+    local name="$1" path ans
+    validate_app_name "$name"
+
+    printf "App '%s' is not registered.\n" "$name"
+    read -r -p "Register it now? [Y/n] " ans
+    case "${ans:-Y}" in
+        [Yy]*|'') ;;
+        *) die "Aborted." ;;
+    esac
+
+    read -r -e -p "Project directory for '$name': " path
+    [ -n "$path" ] || die "No path provided."
+    path="${path/#\~/$HOME}"
+    [ -d "$path" ] || die "Directory does not exist: $path"
+    path="$(cd "$path" && pwd)"
+
+    printf '%s=%s\n' "$name" "$path" >> "$CONFIG_FILE"
+    printf "Registered: %s -> %s\n" "$name" "$path"
+}
+
+pick_app() {
+    # Interactive picker. Echoes the chosen app name to stdout; all UI
+    # output goes to stderr so callers can capture the result.
+    # Uses fzf (arrow keys + fuzzy search) if installed, otherwise falls
+    # back to a numbered prompt. Entries ordered by most-recent usage.
+    ensure_config
+    if [ ! -s "$CONFIG_FILE" ]; then
+        echo "No apps registered yet." >&2
+        echo "Run 'aidev <name>' to register one, or 'aidev -h' for help." >&2
+        exit 1
+    fi
+
+    local sorted width
+    sorted="$(sorted_apps)"
+    width="$(printf '%s\n' "$sorted" | awk -F= '{ if (length($1) > w) w = length($1) } END { print w }')"
+
+    if command -v fzf >/dev/null 2>&1; then
+        local line
+        line="$(
+            printf '%s\n' "$sorted" \
+            | awk -F= -v w="$width" '{
+                name = $1
+                sub(/^[^=]*=/, "")
+                printf "%-*s  %s\n", w, name, $0
+            }' \
+            | fzf --prompt='aidev > ' --height=40% --layout=reverse --no-info --no-sort
+        )" || die "Aborted."
+        [ -n "$line" ] || die "Aborted."
+        # Names cannot contain whitespace (validate_app_name), so the
+        # first whitespace-delimited token is the name.
+        printf '%s\n' "${line%%[[:space:]]*}"
+        return
+    fi
+
+    local names=() paths=() count i choice
+    while IFS='=' read -r n p; do
+        names+=("$n")
+        paths+=("$p")
+    done <<< "$sorted"
+    count=${#names[@]}
+
+    echo "Registered apps:" >&2
+    for (( i=0; i<count; i++ )); do
+        printf "  %d) %-*s  %s\n" "$((i+1))" "$width" "${names[i]}" "${paths[i]}" >&2
+    done
+
+    printf "Pick app [1-%d] (q to quit): " "$count" >&2
+    read -r choice
+    case "$choice" in
+        ''|q|Q) die "Aborted." ;;
+        *[!0-9]*) die "Invalid choice: $choice" ;;
+    esac
+    [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ] \
+        || die "Choice out of range: $choice"
+
+    printf '%s\n' "${names[$((choice-1))]}"
+}
+
+remove_app() {
+    local name="$1" canon path ans tmp
+    validate_app_name "$name"
+    ensure_config
+
+    canon="$(canonical_name "$name")"
+    [ -n "$canon" ] || die "App '$name' is not registered."
+    path="$(lookup_app "$name")"
+
+    printf "Remove '%s' (%s)? [y/N] " "$canon" "$path"
+    read -r ans
+    case "${ans:-N}" in
+        [Yy]*) ;;
+        *) die "Aborted." ;;
+    esac
+
+    tmp="$(mktemp "${CONFIG_FILE}.XXXXXX")"
+    awk -F= -v key="$name" 'tolower($1) != tolower(key)' "$CONFIG_FILE" > "$tmp"
+    mv "$tmp" "$CONFIG_FILE"
+
+    if [ -f "$USAGE_FILE" ]; then
+        tmp="$(mktemp "${USAGE_FILE}.XXXXXX")"
+        awk -F= -v key="$name" 'tolower($1) != tolower(key)' "$USAGE_FILE" > "$tmp"
+        mv "$tmp" "$USAGE_FILE"
+    fi
+
+    printf "Removed: %s\n" "$canon"
+}
+
+docker_ready() {
+    docker info >/dev/null 2>&1
+}
+
+is_wsl() {
+    [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null
+}
+
+start_docker() {
+    if is_wsl; then
+        command -v docker.exe >/dev/null 2>&1 \
+            || die "docker.exe not found on PATH — is Docker Desktop installed on Windows?"
+        echo "Starting Docker Desktop..."
+        docker.exe desktop start >/dev/null 2>&1 \
+            || die "Failed to invoke 'docker.exe desktop start'."
+        return
+    fi
+
+    # Native Linux: let the active Docker context decide which daemon to start.
+    local ctx
+    ctx="$(docker context show 2>/dev/null || echo default)"
+
+    if [ "$ctx" = "desktop-linux" ]; then
+        echo "Starting Docker Desktop..."
+        systemctl --user start docker-desktop \
+            || die "Failed to start docker-desktop.service."
+        return
+    fi
+
+    echo "Starting Docker Engine (may prompt for sudo password)..."
+    sudo systemctl start docker \
+        || die "Failed to start docker.service."
+}
+
+ensure_docker() {
+    if docker_ready; then
+        return
+    fi
+
+    start_docker
+
+    local elapsed=0
+    while ! docker_ready; do
+        if [ "$elapsed" -ge "$DOCKER_WAIT_SECONDS" ]; then
+            die "Docker did not become ready within ${DOCKER_WAIT_SECONDS}s."
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    echo "Docker is ready."
+}
+
+main() {
+    case "${1:-}" in
+        -h|--help|help) usage 0 ;;
+        remove)
+            [ $# -eq 2 ] || die "Usage: aidev remove <app-name>"
+            remove_app "$2"
+            return
+            ;;
+    esac
+
+    local name="" path resume=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            -r|--resume) resume=1 ;;
+            -*) die "Unknown flag: $arg" ;;
+            *)
+                [ -z "$name" ] || die "Multiple app names provided: '$name', '$arg'"
+                name="$arg"
+                ;;
+        esac
+    done
+
+    if [ -z "$name" ]; then
+        name="$(pick_app)"
+    fi
+
+    validate_app_name "$name"
+    ensure_config
+
+    path="$(lookup_app "$name")"
+    if [ -z "$path" ]; then
+        register_app "$name"
+        path="$(lookup_app "$name")"
+    fi
+    [ -d "$path" ] || die "Configured directory missing for '$name': $path"
+
+    ensure_docker
+
+    record_usage "$(canonical_name "$name")"
+
+    cd "$path"
+    if [ "$resume" -eq 1 ]; then
+        echo "Running claude-docker --resume in $path"
+        exec claude-docker --resume
+    else
+        echo "Running claude-docker in $path"
+        exec claude-docker
+    fi
+}
+
+main "$@"
