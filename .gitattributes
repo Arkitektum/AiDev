@@ -1,0 +1,16 @@
+# Normalize all text files to LF in the repository.
+# This prevents Windows checkouts from introducing CRLF that breaks
+# shell scripts run under bash/WSL/git-bash.
+* text=auto eol=lf
+
+# Shell scripts and the aidev launcher must always use LF.
+*.sh    text eol=lf
+aidev   text eol=lf
+install.sh text eol=lf
+
+# Mark binary types so git never touches their bytes.
+*.png   binary
+*.jpg   binary
+*.gif   binary
+*.ico   binary
+*.zip   binary
