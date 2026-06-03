@@ -290,12 +290,23 @@ main() {
     validate_app_name "$name"
     ensure_config
 
+    local newly_registered=0
     path="$(lookup_app "$name")"
     if [ -z "$path" ]; then
         register_app "$name"
         path="$(lookup_app "$name")"
+        newly_registered=1
     fi
     [ -d "$path" ] || die "Configured directory missing for '$name': $path"
+
+    if [ "$newly_registered" -eq 1 ]; then
+        local run_now
+        read -r -p "Run claude-docker now? [Y/n] " run_now
+        case "${run_now:-Y}" in
+            [Yy]*|'') ;;
+            *) echo "Done."; return ;;
+        esac
+    fi
 
     ensure_docker
 
