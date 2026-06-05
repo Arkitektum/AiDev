@@ -2,7 +2,7 @@
 # aidev — start Docker (if needed), then run claude-docker in the
 # project directory configured for the named app.
 #
-# Usage: aidev <app-name> [-r|--resume]
+# Usage: aidev <app-name> [-r|--resume [session-id]]
 # Config: ${XDG_CONFIG_HOME:-~/.config}/aidev/apps.conf
 #         one entry per line, format: name=/absolute/path
 
@@ -20,13 +20,16 @@ usage() {
 Usage:
   aidev [-r|--resume]       Show an interactive picker of registered apps,
                             then run the same flow as 'aidev <app-name>'.
-  aidev <app-name> [-r|--resume]
+  aidev <app-name> [-r|--resume [session-id]]
                             Start Docker Desktop (if needed) and run
                             'claude-docker' in the project directory
                             registered for <app-name>. Prompts to register
                             <app-name> if it is unknown. With -r/--resume,
                             forwards --resume to claude-docker so you can
-                            pick a previous Claude session.
+                            pick a previous Claude session. Give a session-id
+                            after -r (e.g. 'aidev <app-name> -r <session-id>')
+                            to resume that session directly. The app name must
+                            come before -r for the session-id to attach.
   aidev remove <app-name>   Remove an app from the config.
   aidev -h | --help         Show this help.
 
@@ -271,16 +274,26 @@ main() {
             ;;
     esac
 
-    local name="" path resume=0 arg
-    for arg in "$@"; do
-        case "$arg" in
-            -r|--resume) resume=1 ;;
-            -*) die "Unknown flag: $arg" ;;
+    local name="" path resume=0 session=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -r|--resume)
+                resume=1
+                # Consume the next token as the session id only if an app name
+                # is already set and the token is not itself a flag. This keeps
+                # 'aidev -r myapp' meaning app=myapp (picker), not a session id.
+                if [ -n "$name" ] && [ $# -gt 1 ] && [ "${2#-}" = "$2" ]; then
+                    session="$2"
+                    shift
+                fi
+                ;;
+            -*) die "Unknown flag: $1" ;;
             *)
-                [ -z "$name" ] || die "Multiple app names provided: '$name', '$arg'"
-                name="$arg"
+                [ -z "$name" ] || die "Multiple app names provided: '$name', '$1'"
+                name="$1"
                 ;;
         esac
+        shift
     done
 
     if [ -z "$name" ]; then
@@ -313,7 +326,10 @@ main() {
     record_usage "$(canonical_name "$name")"
 
     cd "$path"
-    if [ "$resume" -eq 1 ]; then
+    if [ "$resume" -eq 1 ] && [ -n "$session" ]; then
+        echo "Running claude-docker --resume $session in $path"
+        exec claude-docker --resume "$session"
+    elif [ "$resume" -eq 1 ]; then
         echo "Running claude-docker --resume in $path"
         exec claude-docker --resume
     else
