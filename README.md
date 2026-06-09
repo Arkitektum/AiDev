@@ -142,6 +142,7 @@ aidev [-r]                    # interactive picker
 aidev <app-name> [-r]         # start Docker if needed, cd to the app, run claude-docker
 aidev remove [app-name]       # remove an app (no name → picker)
 aidev rename [old [new]]      # rename an app, keeping its directory
+aidev update                  # fast-forward aidev itself to the latest origin/main
 aidev -h                      # help
 ```
 
@@ -157,6 +158,7 @@ Examples:
 | `aidev remove` | Pick an app to remove from the config. |
 | `aidev rename MyApp NewName` | Rename `MyApp` to `NewName`, keeping its directory. |
 | `aidev rename` | Pick an app, then enter its new name. |
+| `aidev update` | Fast-forward aidev itself to the latest `origin/main`. |
 
 > **Note:** for `-r <session-id>`, the app name must come *before* `-r`.
 > `aidev -r MyApp` treats `MyApp` as the app for the picker, not as a session id.
@@ -176,8 +178,23 @@ Either way, AiDev waits until Docker is ready (up to 120s) before launching
 ## Config
 
 `~/.config/aidev/apps.conf` — one `name=/absolute/path` entry per line; safe
-to edit by hand. (`remove`, `rename` and `help` are reserved and can't be
-used as app names.)
+to edit by hand. (`remove`, `rename`, `update` and `help` are reserved and
+can't be used as app names.)
+
+## Staying up to date
+
+When the checkout is on `main`, aidev quietly checks `origin/main` in the
+background (at most once a day) and prints a one-line nudge on startup when
+new commits are available:
+
+```
+aidev: update available — 2 commits behind origin/main. Run 'aidev update'.
+```
+
+`aidev update` fast-forwards the checkout (`git pull --ff-only`). It refuses
+if the working tree has uncommitted changes or the history has diverged,
+leaving you to resolve those manually. Because aidev is installed as a
+symlink, the update takes effect on the next run — no reinstall needed.
 
 ---
 

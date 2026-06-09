@@ -11,7 +11,9 @@ set -euo pipefail
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/aidev"
 CONFIG_FILE="$CONFIG_DIR/apps.conf"
 USAGE_FILE="$CONFIG_DIR/usage.conf"
+UPDATE_FILE="$CONFIG_DIR/update.conf"
 DOCKER_WAIT_SECONDS=120
+UPDATE_CHECK_INTERVAL=86400  # seconds between background update checks (24h)
 # How deep below a known project location to look for candidate directories
 # when registering a new app (1 = siblings only, 2 = also their subfolders).
 # Anything but a positive number would only break the search, so fall back.
@@ -55,6 +57,9 @@ Usage:
                             Rename a registered app, keeping its directory.
                             With no old-name, shows the interactive picker;
                             with no new-name, prompts for one.
+  aidev update              Update aidev itself to the latest origin/main
+                            (fast-forward only; refuses if the checkout has
+                            uncommitted changes or has diverged).
   aidev -h | --help         Show this help.
 
 Config file: $CONFIG_FILE
@@ -67,8 +72,8 @@ Environment:
                         folders were looked at and why each was offered
                         or held back.
 
-Note: 'remove', 'rename' and 'help' are reserved and cannot be used as
-      app names.
+Note: 'remove', 'rename', 'update' and 'help' are reserved and cannot be
+      used as app names.
 EOF
     exit "${1:-1}"
 }
@@ -126,13 +131,122 @@ record_usage() {
     mv "$tmp" "$USAGE_FILE"
 }
 
+# --- Self-update --------------------------------------------------------------
+
+_REPO_DIR=""
+repo_dir() {
+    # Resolve the directory of the real aidev script (following the symlink
+    # that install.sh creates). Cached after first call.
+    if [ -z "$_REPO_DIR" ]; then
+        local src real
+        src="${BASH_SOURCE[0]}"
+        real="$(readlink -f "$src" 2>/dev/null)" || real="$src"
+        _REPO_DIR="$(dirname "$real")"
+    fi
+    printf '%s\n' "$_REPO_DIR"
+}
+
+git_repo_ready() {
+    # True only when the checkout is a git repo sitting on 'main' with
+    # 'origin/main' as its upstream — i.e. a normal end-user install, not a
+    # developer working on a feature branch. Keeps the banner from nagging
+    # during development.
+    local rd
+    rd="$(repo_dir)"
+    git -C "$rd" rev-parse --git-dir >/dev/null 2>&1 || return 1
+    [ "$(git -C "$rd" rev-parse --abbrev-ref HEAD 2>/dev/null)" = "main" ] || return 1
+    git -C "$rd" rev-parse --verify --quiet origin/main >/dev/null 2>&1
+}
+
+read_update_field() {
+    # Echo the value of key "$1" from UPDATE_FILE, or empty if absent.
+    [ -f "$UPDATE_FILE" ] || return 0
+    awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$UPDATE_FILE"
+}
+
+write_update_cache() {
+    # Atomically write "last_check" and "behind" to UPDATE_FILE.
+    local last_check="$1" behind="$2" tmp
+    mkdir -p "$CONFIG_DIR"
+    tmp="$(mktemp "${UPDATE_FILE}.XXXXXX")"
+    printf 'last_check=%s\nbehind=%s\n' "$last_check" "$behind" > "$tmp"
+    mv "$tmp" "$UPDATE_FILE"
+}
+
+update_banner() {
+    # Print a one-line nudge if the cached check says we're behind origin/main.
+    # Reads only from cache: instant and offline-safe.
+    git_repo_ready || return 0
+    local behind
+    behind="$(read_update_field behind)"
+    case "$behind" in
+        ''|0|*[!0-9]*) return 0 ;;
+    esac
+    local plural="commits"
+    [ "$behind" = "1" ] && plural="commit"
+    printf "aidev: update available — %s %s behind origin/main. Run 'aidev update'.\n" \
+        "$behind" "$plural" >&2
+}
+
+maybe_refresh_update_cache() {
+    # If the cache is stale, fetch + recompute in the background so the current
+    # run never waits on the network. The fresh result shows on the next run.
+    git_repo_ready || return 0
+
+    local now last_check rd
+    now="$(date +%s)"
+    last_check="$(read_update_field last_check)"
+    case "$last_check" in ''|*[!0-9]*) last_check=0 ;; esac
+    [ $((now - last_check)) -ge "$UPDATE_CHECK_INTERVAL" ] || return 0
+
+    # Bump the timestamp now so concurrent invocations don't all fetch.
+    write_update_cache "$now" "$(read_update_field behind)"
+
+    rd="$(repo_dir)"
+    {
+        # Never prompt: GIT_TERMINAL_PROMPT=0 turns a missing-credentials
+        # situation into a silent failure instead of an interactive prompt,
+        # while still letting a configured credential helper supply cached
+        # credentials non-interactively. stdin is detached for good measure.
+        GIT_TERMINAL_PROMPT=0 git -C "$rd" fetch --quiet origin main </dev/null 2>/dev/null || exit 0
+        local behind
+        behind="$(git -C "$rd" rev-list --count main..origin/main 2>/dev/null)" || exit 0
+        case "$behind" in ''|*[!0-9]*) exit 0 ;; esac
+        write_update_cache "$now" "$behind"
+    } >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+}
+
+cmd_update() {
+    local rd local_sha
+    rd="$(repo_dir)"
+    git -C "$rd" rev-parse --git-dir >/dev/null 2>&1 \
+        || die "aidev is not a git checkout ($rd) — update only works for git installs."
+
+    # Protect any work in progress: refuse on a dirty tree.
+    if ! git -C "$rd" diff --quiet || ! git -C "$rd" diff --cached --quiet; then
+        die "uncommitted changes in $rd — commit or stash them, then retry."
+    fi
+
+    echo "Updating aidev ($rd)..."
+    if ! git -C "$rd" pull --ff-only; then
+        die "could not fast-forward — the checkout has diverged from origin/main. Resolve manually (e.g. 'git -C $rd pull --rebase')."
+    fi
+
+    # Clear the banner: we are now up to date.
+    write_update_cache "$(date +%s)" 0
+
+    local_sha="$(git -C "$rd" rev-parse --short HEAD 2>/dev/null)"
+    printf "Updated to %s. Takes effect on the next run.\n" "${local_sha:-latest}"
+}
+
 validate_app_name() {
     local name="$1"
     case "$name" in
         ''|*=*|*/*|*[[:space:]]*) die "Invalid app name: '$name'" ;;
     esac
     case "${name,,}" in
-        remove|rename|help|-h|--help) die "'$name' is reserved and cannot be used as an app name." ;;
+        remove|rename|update|help|-h|--help) die "'$name' is reserved and cannot be used as an app name." ;;
     esac
 }
 
@@ -569,6 +683,16 @@ ensure_docker() {
 }
 
 main() {
+    # Show any cached "update available" nudge, then refresh the cache in the
+    # background (throttled) so the next run reflects the latest origin/main.
+    # Not for 'aidev update' itself: telling someone to run the command they
+    # are running reads as a bug, and a background fetch started here would
+    # race the pull that cmd_update is about to do in the same checkout.
+    if [ "${1:-}" != update ]; then
+        update_banner
+        maybe_refresh_update_cache
+    fi
+
     case "${1:-}" in
         -h|--help|help) usage 0 ;;
         remove)
@@ -590,6 +714,11 @@ main() {
                 *) die "Usage: aidev rename [old-name [new-name]]" ;;
             esac
             rename_app "$old" "$new"
+            return
+            ;;
+        update)
+            [ $# -eq 1 ] || die "Usage: aidev update"
+            cmd_update
             return
             ;;
     esac
