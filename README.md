@@ -32,7 +32,7 @@ ln -s "$PWD/aidev" ~/.local/bin/aidev
 ```
 aidev [-r]                    # picker; with -r, forwards --resume to claude-docker
 aidev <app-name> [-r]         # start Docker if needed, cd to the app, run claude-docker (-r → --resume)
-aidev remove <app-name>       # remove an app from the config
+aidev remove [app-name]       # remove an app from the config (no name → picker)
 aidev -h                      # help
 ```
 

@@ -30,7 +30,9 @@ Usage:
                             after -r (e.g. 'aidev <app-name> -r <session-id>')
                             to resume that session directly. The app name must
                             come before -r for the session-id to attach.
-  aidev remove <app-name>   Remove an app from the config.
+  aidev remove [app-name]   Remove an app from the config. With no name,
+                            shows the interactive picker to choose which
+                            app to remove.
   aidev -h | --help         Show this help.
 
 Config file: $CONFIG_FILE
@@ -268,8 +270,13 @@ main() {
     case "${1:-}" in
         -h|--help|help) usage 0 ;;
         remove)
-            [ $# -eq 2 ] || die "Usage: aidev remove <app-name>"
-            remove_app "$2"
+            local target
+            case $# in
+                1) target="$(pick_app)" ;;
+                2) target="$2" ;;
+                *) die "Usage: aidev remove [app-name]" ;;
+            esac
+            remove_app "$target"
             return
             ;;
     esac
