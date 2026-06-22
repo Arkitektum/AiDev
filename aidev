@@ -117,7 +117,7 @@ register_app() {
         *) die "Aborted." ;;
     esac
 
-    read -r -e -p "Project directory for '$name': " path
+    path="$(choose_project_dir "$name")"
     [ -n "$path" ] || die "No path provided."
     path="${path/#\~/$HOME}"
     [ -d "$path" ] || die "Directory does not exist: $path"
@@ -183,6 +183,120 @@ pick_app() {
         || die "Choice out of range: $choice"
 
     printf '%s\n' "${names[$((choice-1))]}"
+}
+
+pick_line() {
+    # Generic picker over newline-delimited items read from stdin. Echoes
+    # the chosen line to stdout; all UI goes to stderr. Uses fzf if
+    # installed, otherwise a numbered prompt. Returns 1 on abort/empty so
+    # callers can decide how to handle cancellation (unlike pick_app, which
+    # dies).
+    local prompt="${1:-pick > }"
+    local items
+    items="$(cat)"
+    [ -n "$items" ] || return 1
+
+    if command -v fzf >/dev/null 2>&1; then
+        local line
+        line="$(
+            printf '%s\n' "$items" \
+            | fzf --prompt="$prompt" --height=40% --layout=reverse --no-info --no-sort
+        )" || return 1
+        [ -n "$line" ] || return 1
+        printf '%s\n' "$line"
+        return 0
+    fi
+
+    local arr=() l count i choice
+    while IFS= read -r l; do arr+=("$l"); done <<< "$items"
+    count=${#arr[@]}
+    for (( i=0; i<count; i++ )); do
+        printf "  %d) %s\n" "$((i+1))" "${arr[i]}" >&2
+    done
+    printf "Pick [1-%d] (q to quit): " "$count" >&2
+    # Items arrive on stdin, so read the user's choice from the terminal
+    # (fzf reads /dev/tty for the same reason).
+    read -r choice </dev/tty
+    case "$choice" in
+        ''|q|Q) return 1 ;;
+        *[!0-9]*) return 1 ;;
+    esac
+    { [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; } || return 1
+    printf '%s\n' "${arr[$((choice-1))]}"
+}
+
+suggest_dirs() {
+    # Emit candidate project directories (absolute paths, one per line) for
+    # a new app: the immediate subdirectories of each registered app's
+    # parent location that are not themselves already registered. Locations
+    # hosting the most registered apps come first; ties break alphabetically.
+    [ -s "$CONFIG_FILE" ] || return 0
+
+    local -A is_registered=() loc_count=()
+    local p parent
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        is_registered["$p"]=1
+        parent="$(dirname "$p")"
+        loc_count["$parent"]=$(( ${loc_count["$parent"]:-0} + 1 ))
+    done < <(awk -F= 'NF>=2 { sub(/^[^=]*=/, ""); print }' "$CONFIG_FILE")
+
+    [ ${#loc_count[@]} -gt 0 ] || return 0
+
+    # Locations ordered by registered-app count (desc), then name (asc).
+    local locations=() loc
+    while IFS=$'\t' read -r _ loc; do
+        locations+=("$loc")
+    done < <(
+        for loc in "${!loc_count[@]}"; do
+            printf '%d\t%s\n' "${loc_count[$loc]}" "$loc"
+        done | sort -t$'\t' -k1,1nr -k2,2
+    )
+
+    local -A seen=()
+    local d saved_nullglob
+    saved_nullglob="$(shopt -p nullglob)"
+    shopt -s nullglob
+    for loc in "${locations[@]}"; do
+        [ -d "$loc" ] || continue
+        # Registered paths are canonical, so "$loc" (their dirname) and the
+        # globbed children are canonical too — no need to re-resolve.
+        for d in "$loc"/*/; do
+            d="${d%/}"
+            [ -n "${is_registered[$d]:-}" ] && continue
+            [ -n "${seen[$d]:-}" ] && continue
+            seen["$d"]=1
+            printf '%s\n' "$d"
+        done
+    done
+    eval "$saved_nullglob"
+}
+
+choose_project_dir() {
+    # Resolve the project directory for a new app. If sibling directories of
+    # existing apps can be suggested, offer them via the picker (plus a
+    # manual-entry item); otherwise — or on abort/manual — fall back to the
+    # free-form prompt. Echoes the chosen path to stdout; UI goes to stderr.
+    local name="$1"
+    local manual_label="[ Enter a path manually... ]"
+    local suggestions
+    suggestions="$(suggest_dirs)"
+
+    if [ -n "$suggestions" ]; then
+        local chosen
+        chosen="$(
+            { printf '%s\n' "$suggestions"; printf '%s\n' "$manual_label"; } \
+            | pick_line "dir for '$name' > "
+        )" || true
+        if [ -n "$chosen" ] && [ "$chosen" != "$manual_label" ]; then
+            printf '%s\n' "$chosen"
+            return 0
+        fi
+    fi
+
+    local path
+    read -r -e -p "Project directory for '$name': " path
+    printf '%s\n' "$path"
 }
 
 remove_app() {

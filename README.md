@@ -36,7 +36,10 @@ aidev remove [app-name]       # remove an app from the config (no name → picke
 aidev -h                      # help
 ```
 
-If `<app-name>` is unknown, you'll be prompted to register it.
+If `<app-name>` is unknown, you'll be prompted to register it. The picker
+then suggests candidate project directories — sibling folders of your
+already-registered apps that aren't registered yet, most-used location
+first — or you can enter a path by hand.
 
 Config: `~/.config/aidev/apps.conf` — one `name=/absolute/path` entry per
 line; safe to edit by hand.
