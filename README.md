@@ -87,6 +87,7 @@ From then on, `aidev MyApp` takes you straight in.
 aidev [-r]                    # interactive picker
 aidev <app-name> [-r]         # start Docker if needed, cd to the app, run claude-docker
 aidev remove [app-name]       # remove an app (no name → picker)
+aidev rename [old [new]]      # rename an app, keeping its directory
 aidev -h                      # help
 ```
 
@@ -100,6 +101,8 @@ Examples:
 | `aidev MyApp -r <session-id>` | Resume that specific session directly. |
 | `aidev -r` | Pick an app, then resume one of its sessions. |
 | `aidev remove` | Pick an app to remove from the config. |
+| `aidev rename MyApp NewName` | Rename `MyApp` to `NewName`, keeping its directory. |
+| `aidev rename` | Pick an app, then enter its new name. |
 
 > **Note:** for `-r <session-id>`, the app name must come *before* `-r`.
 > `aidev -r MyApp` treats `MyApp` as the app for the picker, not as a session id.
@@ -119,8 +122,8 @@ Either way, AiDev waits until Docker is ready (up to 120s) before launching
 ## Config
 
 `~/.config/aidev/apps.conf` — one `name=/absolute/path` entry per line; safe
-to edit by hand. (`remove` and `help` are reserved and can't be used as app
-names.)
+to edit by hand. (`remove`, `rename` and `help` are reserved and can't be
+used as app names.)
 
 ---
 

@@ -33,12 +33,17 @@ Usage:
   aidev remove [app-name]   Remove an app from the config. With no name,
                             shows the interactive picker to choose which
                             app to remove.
+  aidev rename [old-name [new-name]]
+                            Rename a registered app, keeping its directory.
+                            With no old-name, shows the interactive picker;
+                            with no new-name, prompts for one.
   aidev -h | --help         Show this help.
 
 Config file: $CONFIG_FILE
   Format:    one 'name=/absolute/path' entry per line.
 
-Note: 'remove' and 'help' are reserved and cannot be used as app names.
+Note: 'remove', 'rename' and 'help' are reserved and cannot be used as
+      app names.
 EOF
     exit "${1:-1}"
 }
@@ -102,7 +107,7 @@ validate_app_name() {
         ''|*=*|*/*|*[[:space:]]*) die "Invalid app name: '$name'" ;;
     esac
     case "${name,,}" in
-        remove|help|-h|--help) die "'$name' is reserved and cannot be used as an app name." ;;
+        remove|rename|help|-h|--help) die "'$name' is reserved and cannot be used as an app name." ;;
     esac
 }
 
@@ -328,6 +333,47 @@ remove_app() {
     printf "Removed: %s\n" "$canon"
 }
 
+rename_app() {
+    local old="$1" new="${2:-}" canon path existing tmp
+    validate_app_name "$old"
+    ensure_config
+
+    canon="$(canonical_name "$old")"
+    [ -n "$canon" ] || die "App '$old' is not registered."
+    path="$(lookup_app "$old")"
+
+    if [ -z "$new" ]; then
+        read -r -e -p "New name for '$canon': " new
+    fi
+    validate_app_name "$new"
+
+    # Reject a name already taken by a different app. A case-only rename
+    # (e.g. 'MyApp' -> 'myapp') matches itself and is allowed.
+    existing="$(canonical_name "$new")"
+    if [ -n "$existing" ] && [ "${existing,,}" != "${canon,,}" ]; then
+        die "App '$new' is already registered."
+    fi
+
+    # Rewrite the matching entry's name, keeping its value (path/timestamp).
+    tmp="$(mktemp "${CONFIG_FILE}.XXXXXX")"
+    awk -F= -v key="$old" -v new="$new" '
+        tolower($1) == tolower(key) { sub(/^[^=]*=/, ""); printf "%s=%s\n", new, $0; next }
+        { print }
+    ' "$CONFIG_FILE" > "$tmp"
+    mv "$tmp" "$CONFIG_FILE"
+
+    if [ -f "$USAGE_FILE" ]; then
+        tmp="$(mktemp "${USAGE_FILE}.XXXXXX")"
+        awk -F= -v key="$old" -v new="$new" '
+            tolower($1) == tolower(key) { sub(/^[^=]*=/, ""); printf "%s=%s\n", new, $0; next }
+            { print }
+        ' "$USAGE_FILE" > "$tmp"
+        mv "$tmp" "$USAGE_FILE"
+    fi
+
+    printf "Renamed: %s -> %s\n" "$canon" "$new"
+}
+
 docker_ready() {
     docker info >/dev/null 2>&1
 }
@@ -391,6 +437,17 @@ main() {
                 *) die "Usage: aidev remove [app-name]" ;;
             esac
             remove_app "$target"
+            return
+            ;;
+        rename)
+            local old new
+            case $# in
+                1) old="$(pick_app)"; new="" ;;
+                2) old="$2"; new="" ;;
+                3) old="$2"; new="$3" ;;
+                *) die "Usage: aidev rename [old-name [new-name]]" ;;
+            esac
+            rename_app "$old" "$new"
             return
             ;;
     esac
