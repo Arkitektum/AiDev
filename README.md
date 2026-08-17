@@ -23,13 +23,17 @@ more "which folder was that again?" or "is Docker up?".
 
   ```text
     aidev >
+    3/3 ──────────────────────────────────────────
+    Type to filter | Up/Down to scroll | Enter to select
   > aidev      /home/you/code/aidev
     MyApp      /home/you/code/myapp
     MyWebSite  /home/you/code/webportal
   ```
   Start typing to fuzzy-filter; arrow keys move the `>` cursor; Enter launches
-  the highlighted app. Apps are ordered most-recently-used first. Without
-  `fzf`, you get a numbered list to pick from instead.
+  the highlighted app. Apps are ordered most-recently-used first. The `3/3`
+  counter is matches out of total — when it reads more than the rows on
+  screen, the list scrolls. Without `fzf`, you get a numbered list to pick
+  from instead.
 - **Resume sessions** — jump back into a previous Claude session with `-r`.
 
 ## Prerequisites

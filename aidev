@@ -157,6 +157,18 @@ register_app() {
     printf "Registered: %s -> %s\n" "$name" "$path"
 }
 
+# Shared fzf settings for both pickers, so they look and behave alike.
+# Deliberately no --no-info: fzf's counter ("12/57") is what tells you the
+# list is longer than the window. The header spells out the keys, since a
+# list that fits looks identical to one that is merely scrolled to the top.
+FZF_OPTS=(
+    --height=60%
+    --layout=reverse
+    --no-sort
+    --info=default
+    --header='Type to filter | Up/Down to scroll | Enter to select'
+)
+
 pick_app() {
     # Interactive picker. Echoes the chosen app name to stdout; all UI
     # output goes to stderr so callers can capture the result.
@@ -182,7 +194,7 @@ pick_app() {
                 sub(/^[^=]*=/, "")
                 printf "%-*s  %s\n", w, name, $0
             }' \
-            | fzf --prompt='aidev > ' --height=40% --layout=reverse --no-info --no-sort
+            | fzf --prompt='aidev > ' "${FZF_OPTS[@]}"
         )" || die "Aborted."
         [ -n "$line" ] || die "Aborted."
         # Names cannot contain whitespace (validate_app_name), so the
@@ -230,7 +242,7 @@ pick_line() {
         local line
         line="$(
             printf '%s\n' "$items" \
-            | fzf --prompt="$prompt" --height=40% --layout=reverse --no-info --no-sort
+            | fzf --prompt="$prompt" "${FZF_OPTS[@]}"
         )" || return 1
         [ -n "$line" ] || return 1
         printf '%s\n' "$line"
