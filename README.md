@@ -75,9 +75,59 @@ Docker is ready.
 Running claude-docker in /home/you/code/myapp
 ```
 
-The directory suggestions are sibling folders of apps you've already
-registered that aren't registered yet — most-used location first — so after
-your first app or two, registering the next is usually a single keypress.
+The directory suggestions are the unregistered folders around apps you've
+already registered — the folders next to them, each with its own subfolders
+listed right underneath, most-used location first — so after your first app
+or two, registering the next is usually a single keypress. If you keep repos
+grouped under an org or client folder, that nesting is covered too:
+
+```text
+/home/you/code/Arkitektum
+/home/you/code/Arkitektum/RepoB
+/home/you/code/Personal
+/home/you/code/Personal/Toy
+```
+
+The search stays out of the way: inside a folder that is a project of its own
+(it has `.git`, `package.json`, a `pom.xml`, a `.sln`, ...) only sub-projects
+are offered, so a repo's `src/` and `docs/` stay out of the list while an app
+suite kept in a single repo — or a monorepo's packages — still shows up. Build
+noise like `node_modules` is skipped outright. Set `AIDEV_SUGGEST_DEPTH` to
+change how deep it looks (default `2`; `1` = siblings only).
+
+Registering a folder does not close it off. If you register an app suite as
+one app — handy when you want a session that can read across all of it — the
+apps inside it stay on offer, so you can register them individually too:
+
+```text
+/home/you/code/IKA_Kongsberg/IKA_Innsyn/IKA_Innsyn_Cosdoc
+/home/you/code/IKA_Kongsberg/IKA_Innsyn/IKA_Innsyn_Gerica
+...
+```
+
+Registering the *first* app of a deeper layout — say `customer/appsuite/app`,
+three levels below anything you have registered so far — reaches past that
+default. Raise it for that one run:
+
+```bash
+AIDEV_SUGGEST_DEPTH=3 aidev MyApp
+```
+
+You only need that once per location: once one app in the suite is
+registered, its siblings show up like any other candidate.
+
+If a folder you expected is missing from the list, `AIDEV_SUGGEST_DEBUG=1`
+makes the search explain itself on stderr — which folders it looked at, and
+why each was offered or held back. Keep a copy, since the picker draws over
+the terminal:
+
+```bash
+AIDEV_SUGGEST_DEBUG=1 aidev MyApp 2> >(tee /tmp/aidev-suggest.log >&2)
+```
+
+Copy rather than redirect: prompts share that stream, so a plain
+`2>/tmp/aidev-suggest.log` hides the `Register it now?` question — and the
+whole list, if you are on the numbered picker rather than `fzf`.
 
 From then on, `aidev MyApp` takes you straight in.
 

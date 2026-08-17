@@ -12,8 +12,26 @@ CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/aidev"
 CONFIG_FILE="$CONFIG_DIR/apps.conf"
 USAGE_FILE="$CONFIG_DIR/usage.conf"
 DOCKER_WAIT_SECONDS=120
+# How deep below a known project location to look for candidate directories
+# when registering a new app (1 = siblings only, 2 = also their subfolders).
+# Anything but a positive number would only break the search, so fall back.
+SUGGEST_MAX_DEPTH="${AIDEV_SUGGEST_DEPTH:-2}"
+case "$SUGGEST_MAX_DEPTH" in
+    ''|0|*[!0-9]*) SUGGEST_MAX_DEPTH=2 ;;
+esac
+# Upper bound on suggestions, so the numbered picker stays usable.
+SUGGEST_MAX_ITEMS=200
+# Set AIDEV_SUGGEST_DEBUG=1 to have the search explain, on stderr, what it
+# looked at and why each folder was offered or held back.
+SUGGEST_DEBUG="${AIDEV_SUGGEST_DEBUG:-}"
 
 die() { printf 'aidev: %s\n' "$*" >&2; exit 1; }
+
+dbg_suggest() {
+    # Suggestions go to stdout, so tracing goes to stderr.
+    [ -n "$SUGGEST_DEBUG" ] || return 0
+    printf 'aidev[suggest]: %s\n' "$*" >&2
+}
 
 usage() {
     cat <<EOF
@@ -41,6 +59,13 @@ Usage:
 
 Config file: $CONFIG_FILE
   Format:    one 'name=/absolute/path' entry per line.
+
+Environment:
+  AIDEV_SUGGEST_DEPTH   How deep to look for directory suggestions when
+                        registering an app (default 2; 1 = siblings only).
+  AIDEV_SUGGEST_DEBUG   Set to 1 to trace that search on stderr: which
+                        folders were looked at and why each was offered
+                        or held back.
 
 Note: 'remove', 'rename' and 'help' are reserved and cannot be used as
       app names.
@@ -230,18 +255,125 @@ pick_line() {
     printf '%s\n' "${arr[$((choice-1))]}"
 }
 
+is_project_root() {
+    # True if the directory looks like a project in its own right, rather
+    # than a container of projects. Used to keep a repo's src/, tests/,
+    # bin/ ... out of the candidate list.
+    # '.claude' is deliberately not a marker: a Claude session leaves one
+    # behind in every directory it runs in — including the client and suite
+    # folders whose whole purpose is to group projects.
+    # On a hit, names the deciding marker in PROJECT_ROOT_MARKER, so the
+    # debug trace can say what made up its mind.
+    local d="$1" m
+    PROJECT_ROOT_MARKER=""
+    for m in .git package.json pyproject.toml go.mod Cargo.toml pom.xml \
+             build.gradle build.gradle.kts; do
+        if [ -e "$d/$m" ]; then PROJECT_ROOT_MARKER="$m"; return 0; fi
+    done
+    local saved_nullglob hit
+    # 'shopt -p' exits 1 when the option is unset (the common case), which
+    # would trip 'set -e' — the value it prints is still the right restore
+    # command, so ignore the status.
+    saved_nullglob="$(shopt -p nullglob || true)"
+    shopt -s nullglob
+    hit=("$d"/*.sln "$d"/*.csproj)
+    eval "$saved_nullglob"
+    [ ${#hit[@]} -gt 0 ] || return 1
+    PROJECT_ROOT_MARKER="${hit[0]##*/}"
+}
+
+skip_dir_name() {
+    # Directory names that are never a project of their own. Hidden names
+    # need no entry here: the '*/' glob skips them without dotglob.
+    case "$1" in
+        node_modules|vendor|target|dist|build|out|bin|obj|__pycache__|venv) return 0 ;;
+    esac
+    return 1
+}
+
+walk_suggestions() {
+    # Emit the unregistered directories below "$1", depth-first, so each
+    # folder is followed by the candidates inside it. Recurses until
+    # SUGGEST_MAX_DEPTH levels below the starting location. Reads and
+    # updates suggest_dirs' locals (is_registered, offered, opened, emitted)
+    # through bash's dynamic scope, and returns 2 once the item cap is
+    # reached so that every caller up the stack unwinds.
+    local dir="$1" depth="$2" d only_projects=0 budget what
+    [ -d "$dir" ] || { dbg_suggest "$dir — gone, skipping"; return 0; }
+
+    # Every folder is a candidate, except inside a project of its own: there
+    # only the sub-projects are, since a repo's src/ and docs/ are no place
+    # to start an app. The walk itself never stops, so an app suite kept in
+    # a single repo — or a monorepo's packages — stays reachable.
+    if is_project_root "$dir"; then only_projects=1; fi
+
+    if [ -n "$SUGGEST_DEBUG" ]; then
+        what="not a project itself — every subfolder is a candidate"
+        [ "$only_projects" -eq 0 ] \
+            || what="a project ($PROJECT_ROOT_MARKER) — only sub-projects are candidates"
+        dbg_suggest "$dir (depth $depth${is_registered[$dir]:+, registered}): $what"
+    fi
+
+    # Levels still available below each child. Locations overlap — one can
+    # sit inside another — so the same folder may be reached twice, deeper
+    # the first time and shallower the second. Only the budget decides
+    # whether to open it, never whether it has been met before.
+    budget=$((SUGGEST_MAX_DEPTH - 1 - depth))
+
+    # Registered paths are canonical, so "$dir" and the globbed children
+    # are canonical too — no need to re-resolve.
+    for d in "$dir"/*/; do
+        d="${d%/}"
+        skip_dir_name "${d##*/}" && { dbg_suggest "  ${d##*/}: skipped, build output"; continue; }
+
+        if [ -n "${offered[$d]:-}" ]; then
+            dbg_suggest "  ${d##*/}: listed already"
+        elif [ -n "${is_registered[$d]:-}" ]; then
+            dbg_suggest "  ${d##*/}: not offered, already registered"
+        elif [ "$only_projects" -eq 1 ] && ! is_project_root "$d"; then
+            dbg_suggest "  ${d##*/}: not offered, no project marker and we are inside a project"
+        else
+            [ "$emitted" -lt "$SUGGEST_MAX_ITEMS" ] \
+                || { dbg_suggest "  item cap ($SUGGEST_MAX_ITEMS) reached, stopping"; return 2; }
+            printf '%s\n' "$d"
+            emitted=$((emitted + 1))
+            offered["$d"]=1
+            dbg_suggest "  ${d##*/}: offered"
+        fi
+
+        if [ "$budget" -le 0 ]; then
+            dbg_suggest "  ${d##*/}: not opened, depth limit $SUGGEST_MAX_DEPTH reached"
+        elif [ "${opened[$d]:-0}" -ge "$budget" ]; then
+            dbg_suggest "  ${d##*/}: not opened again, already searched this deep"
+        else
+            opened["$d"]="$budget"
+            walk_suggestions "$d" "$((depth + 1))" || return 2
+        fi
+    done
+    return 0
+}
+
 suggest_dirs() {
     # Emit candidate project directories (absolute paths, one per line) for
-    # a new app: the immediate subdirectories of each registered app's
-    # parent location that are not themselves already registered. Locations
-    # hosting the most registered apps come first; ties break alphabetically.
-    [ -s "$CONFIG_FILE" ] || return 0
+    # a new app: unregistered directories found below each registered app's
+    # parent location, down to SUGGEST_MAX_DEPTH levels, so both siblings of
+    # your apps and the subfolders of grouping directories (e.g. an org
+    # folder holding several repos) show up. Ordered depth-first, so a
+    # folder's candidates are listed under it; locations hosting the most
+    # registered apps come before others, ties break alphabetically.
+    [ -s "$CONFIG_FILE" ] || { dbg_suggest "no apps registered yet ($CONFIG_FILE)"; return 0; }
+    dbg_suggest "config $CONFIG_FILE, depth limit $SUGGEST_MAX_DEPTH, item cap $SUGGEST_MAX_ITEMS"
 
     local -A is_registered=() loc_count=()
     local p parent
     while IFS= read -r p; do
         [ -n "$p" ] || continue
         is_registered["$p"]=1
+        if [ -d "$p" ]; then
+            dbg_suggest "registered: $p"
+        else
+            dbg_suggest "registered: $p — MISSING on disk"
+        fi
         parent="$(dirname "$p")"
         loc_count["$parent"]=$(( ${loc_count["$parent"]:-0} + 1 ))
     done < <(awk -F= 'NF>=2 { sub(/^[^=]*=/, ""); print }' "$CONFIG_FILE")
@@ -258,23 +390,21 @@ suggest_dirs() {
         done | sort -t$'\t' -k1,1nr -k2,2
     )
 
-    local -A seen=()
-    local d saved_nullglob
-    saved_nullglob="$(shopt -p nullglob)"
+    dbg_suggest "searching from: ${locations[*]}"
+
+    local -A offered=() opened=()
+    local saved_nullglob emitted=0 capped=0
+    saved_nullglob="$(shopt -p nullglob || true)"  # see is_project_root
     shopt -s nullglob
     for loc in "${locations[@]}"; do
-        [ -d "$loc" ] || continue
-        # Registered paths are canonical, so "$loc" (their dirname) and the
-        # globbed children are canonical too — no need to re-resolve.
-        for d in "$loc"/*/; do
-            d="${d%/}"
-            [ -n "${is_registered[$d]:-}" ] && continue
-            [ -n "${seen[$d]:-}" ] && continue
-            seen["$d"]=1
-            printf '%s\n' "$d"
-        done
+        walk_suggestions "$loc" 0 || { capped=1; break; }
     done
     eval "$saved_nullglob"
+    dbg_suggest "$emitted candidate(s) offered"
+
+    [ "$capped" -eq 0 ] || printf \
+        'aidev: more than %d candidate directories — showing the first %d; use manual entry for anything else.\n' \
+        "$SUGGEST_MAX_ITEMS" "$SUGGEST_MAX_ITEMS" >&2
 }
 
 choose_project_dir() {
