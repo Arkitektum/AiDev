@@ -15,9 +15,9 @@ more "which folder was that again?" or "is Docker up?".
 
 - **Remembers your projects by name** — register each app once, then launch
   it from anywhere by name.
-- **Starts Docker for you** — works on both WSL2 (Docker Desktop on Windows)
-  and native Linux (Docker Desktop *or* Docker Engine), picking the right
-  daemon automatically.
+- **Starts Docker for you** — works on WSL2 (Docker Desktop on Windows),
+  native Linux (Docker Desktop *or* Docker Engine) and macOS (Docker
+  Desktop), picking the right daemon automatically.
 - **Interactive picker** — forget the name? Run `aidev` with no arguments and
   pick from a list (with fuzzy search if you have `fzf`):
 
@@ -41,8 +41,20 @@ more "which folder was that again?" or "is Docker up?".
 - [`claude-docker`](https://github.com/Arkitektum/claude-docker) on your
   `PATH` — AiDev is a wrapper around it (it runs Claude Code in a Docker
   container with restricted network access).
-- **Docker** — Docker Desktop on WSL2, or Docker Desktop / Docker Engine on
-  native Linux. AiDev starts it for you, but it must be installed.
+- **Docker** — Docker Desktop on WSL2 or macOS, Docker Desktop / Docker
+  Engine on native Linux. AiDev starts it for you, but it must be installed.
+- **bash 4 or newer.** Linux and WSL2 have this already. **macOS ships bash
+  3.2** as `/bin/bash` and will not move off it, so a Mac needs a current
+  bash alongside it:
+
+  ```bash
+  brew install bash
+  ```
+
+  Nothing else changes: Homebrew installs it beside the system one rather
+  than replacing it, your login shell stays whatever it is (zsh, normally),
+  and `aidev` hands over to the newer bash by itself when started by 3.2.
+  The installer checks for this and offers to run the command for you.
 - [`fzf`](https://github.com/junegunn/fzf) *(optional)* — enables arrow keys
   and fuzzy search in the picker. Without it, a numbered fallback is used.
   The installer can set this up for you.
@@ -53,8 +65,15 @@ more "which folder was that again?" or "is Docker up?".
 ./install.sh
 ```
 
-This symlinks `aidev` into `~/.local/bin`, hints if that directory isn't on
-your `PATH`, and offers to install `fzf`.
+The installer symlinks `aidev` into `~/.local/bin` and then sorts out the
+rest, asking before it changes anything:
+
+- checks that a bash 4+ is present, and offers `brew install bash` on macOS
+  if it is not;
+- if `~/.local/bin` isn't on your `PATH`, offers to add the line that fixes
+  it to your shell's startup file — `~/.zshrc` for zsh, `~/.bashrc` for bash
+  (`~/.bash_profile` on macOS, where Terminal starts login shells);
+- offers to install `fzf`, via `brew` on macOS and `apt` elsewhere.
 
 Manual alternative:
 
@@ -172,8 +191,11 @@ On native Linux, the active Docker context (`docker context show`) decides
 which daemon to start: `desktop-linux` starts Docker Desktop's user service,
 anything else starts the `docker` system service via `sudo systemctl`.
 
-Either way, AiDev waits until Docker is ready (up to 120s) before launching
-`claude-docker`.
+On macOS, AiDev launches Docker Desktop with `open -ga Docker`, which leaves
+the focus where it is rather than pulling the app to the front.
+
+Whichever it is, AiDev waits until Docker is ready (up to 120s) before
+launching `claude-docker`.
 
 ## Config
 

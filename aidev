@@ -29,6 +29,33 @@ SUGGEST_DEBUG="${AIDEV_SUGGEST_DEBUG:-}"
 
 die() { printf 'aidev: %s\n' "$*" >&2; exit 1; }
 
+require_modern_bash() {
+    # aidev uses associative arrays and the ${x,,} lowercase expansion, both
+    # bash 4. macOS still ships 3.2 as /bin/bash, so '#!/usr/bin/env bash'
+    # can land on a shell too old to run this script. Homebrew installs a
+    # current bash beside the system one rather than replacing it — when we
+    # are started by the old one, find the new one and hand over to it.
+    [ "${BASH_VERSINFO[0]:-0}" -lt 4 ] || return 0
+
+    local candidates=(/opt/homebrew/bin/bash /usr/local/bin/bash) candidate on_path
+    on_path="$(command -v bash 2>/dev/null || true)"
+    [ -z "$on_path" ] || candidates+=("$on_path")
+
+    for candidate in "${candidates[@]}"; do
+        [ -x "$candidate" ] || continue
+        # Ask the candidate itself, so an equally old bash cannot send us
+        # round in a loop.
+        "$candidate" -c '[ "${BASH_VERSINFO[0]}" -ge 4 ]' 2>/dev/null || continue
+        exec "$candidate" "$0" "$@"
+    done
+
+    die "needs bash 4 or newer, but is running ${BASH_VERSION:-an unknown version}.
+      macOS ships bash 3.2 as /bin/bash. Install a current one with:
+        brew install bash
+      No Homebrew? See https://brew.sh."
+}
+require_modern_bash "$@"
+
 dbg_suggest() {
     # Suggestions go to stdout, so tracing goes to stderr.
     [ -n "$SUGGEST_DEBUG" ] || return 0
@@ -137,11 +164,26 @@ _REPO_DIR=""
 repo_dir() {
     # Resolve the directory of the real aidev script (following the symlink
     # that install.sh creates). Cached after first call.
+    #
+    # Walked by hand rather than with 'readlink -f': that flag is a GNU
+    # coreutils extension and macOS ships BSD readlink, where falling back to
+    # the unresolved path would hand back ~/.local/bin — not a git checkout —
+    # and silently turn the update check into a no-op.
     if [ -z "$_REPO_DIR" ]; then
-        local src real
+        local src dir hops=0
         src="${BASH_SOURCE[0]}"
-        real="$(readlink -f "$src" 2>/dev/null)" || real="$src"
-        _REPO_DIR="$(dirname "$real")"
+        while [ -L "$src" ]; do
+            hops=$((hops + 1))
+            [ "$hops" -le 40 ] || die "symlink loop while resolving $src"
+            dir="$(cd -P "$(dirname "$src")" && pwd)"
+            src="$(readlink "$src")"
+            # A relative link points at a sibling of the link, not of us.
+            case "$src" in
+                /*) ;;
+                *) src="$dir/$src" ;;
+            esac
+        done
+        _REPO_DIR="$(cd -P "$(dirname "$src")" && pwd)"
     fi
     printf '%s\n' "$_REPO_DIR"
 }
@@ -638,7 +680,22 @@ is_wsl() {
     [ -n "${WSL_DISTRO_NAME:-}" ] || grep -qi microsoft /proc/version 2>/dev/null
 }
 
+is_macos() {
+    [ "$(uname -s)" = Darwin ]
+}
+
 start_docker() {
+    if is_macos; then
+        # Docker Desktop is the only Docker on macOS, and 'open' returns as
+        # soon as the app is launched — the wait loop in ensure_docker is
+        # what actually waits for the daemon. '-g' leaves the focus where
+        # it is instead of pulling the whole app to the front.
+        echo "Starting Docker Desktop..."
+        open -ga Docker \
+            || die "Failed to launch Docker Desktop — is it installed in /Applications?"
+        return
+    fi
+
     if is_wsl; then
         command -v docker.exe >/dev/null 2>&1 \
             || die "docker.exe not found on PATH — is Docker Desktop installed on Windows?"
