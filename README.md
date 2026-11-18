@@ -201,7 +201,8 @@ launching `claude-docker`.
 
 `~/.config/aidev/apps.conf` — one `name=/absolute/path` entry per line; safe
 to edit by hand. (`remove`, `rename`, `update` and `help` are reserved and
-can't be used as app names.)
+can't be used as app names. An app registered under one of them before it
+was reserved can still be renamed with `aidev rename <old-name> <new-name>`.)
 
 ## Staying up to date
 

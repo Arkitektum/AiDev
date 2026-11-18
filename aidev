@@ -604,7 +604,8 @@ choose_project_dir() {
 
 remove_app() {
     local name="$1" canon path ans tmp
-    validate_app_name "$name"
+    # No validate_app_name: being registered is what counts, and an app may
+    # be registered under a name that was reserved later.
     ensure_config
 
     canon="$(canonical_name "$name")"
@@ -633,7 +634,8 @@ remove_app() {
 
 rename_app() {
     local old="$1" new="${2:-}" canon path existing tmp
-    validate_app_name "$old"
+    # Only the new name is validated: an app registered under a name that
+    # was reserved later must still be able to move off it.
     ensure_config
 
     canon="$(canonical_name "$old")"
