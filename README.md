@@ -159,6 +159,7 @@ From then on, `aidev MyApp` takes you straight in.
 ```text
 aidev [-r]                    # interactive picker
 aidev <app-name> [-r]         # start Docker if needed, cd to the app, run claude-docker
+aidev <app-name> -- <args>    # ...and pass <args> on to claude-docker
 aidev remove [app-name]       # remove an app (no name → picker)
 aidev rename [old [new]]      # rename an app, keeping its directory
 aidev update                  # fast-forward aidev itself to the latest origin/main
@@ -174,6 +175,7 @@ Examples:
 | `aidev MyApp -r` | Launch `MyApp` and pick a previous Claude session to resume. |
 | `aidev MyApp -r <session-id>` | Resume that specific session directly. |
 | `aidev -r` | Pick an app, then resume one of its sessions. |
+| `aidev MyApp -- --add-dir ../lib` | Launch `MyApp` with an extra directory mounted. |
 | `aidev remove` | Pick an app to remove from the config. |
 | `aidev rename MyApp NewName` | Rename `MyApp` to `NewName`, keeping its directory. |
 | `aidev rename` | Pick an app, then enter its new name. |
@@ -181,6 +183,27 @@ Examples:
 
 > **Note:** for `-r <session-id>`, the app name must come *before* `-r`.
 > `aidev -r MyApp` treats `MyApp` as the app for the picker, not as a session id.
+
+### Passing options on to claude-docker
+
+Everything after `--` goes to `claude-docker` unchanged, so any option it
+supports is available without AiDev having to know about it:
+
+```bash
+aidev MyApp -- --add-dir ../shared-lib   # mount another directory
+aidev MyApp -- bash                      # a shell in the container instead
+aidev MyApp -- --rebuild                 # rebuild the image first
+```
+
+`claude-docker` runs in the app's directory, so a relative path is relative
+to the app, not to wherever you typed the command.
+
+Environment variables reach `claude-docker` as they are, for example to let
+the container reach a few more domains for one session:
+
+```bash
+CLAUDE_DOCKER_ALLOW_DOMAINS=".example.com,.example.org" aidev MyApp
+```
 
 ## How it works
 
