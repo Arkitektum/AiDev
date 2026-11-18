@@ -162,6 +162,7 @@ aidev <app-name> [-r]         # start Docker if needed, cd to the app, run claud
 aidev <app-name> -- <args>    # ...and pass <args> on to claude-docker
 aidev remove [app-name]       # remove an app (no name → picker)
 aidev rename [old [new]]      # rename an app, keeping its directory
+aidev config [app-name]       # edit an app's extra domains and directories
 aidev update                  # fast-forward aidev itself to the latest origin/main
 aidev -h                      # help
 ```
@@ -179,6 +180,7 @@ Examples:
 | `aidev remove` | Pick an app to remove from the config. |
 | `aidev rename MyApp NewName` | Rename `MyApp` to `NewName`, keeping its directory. |
 | `aidev rename` | Pick an app, then enter its new name. |
+| `aidev config MyApp` | Edit the domains and directories `MyApp` always gets. |
 | `aidev update` | Fast-forward aidev itself to the latest `origin/main`. |
 
 > **Note:** for `-r <session-id>`, the app name must come *before* `-r`.
@@ -223,9 +225,62 @@ launching `claude-docker`.
 ## Config
 
 `~/.config/aidev/apps.conf` — one `name=/absolute/path` entry per line; safe
-to edit by hand. (`remove`, `rename`, `update` and `help` are reserved and
-can't be used as app names. An app registered under one of them before it
-was reserved can still be renamed with `aidev rename <old-name> <new-name>`.)
+to edit by hand. (`remove`, `rename`, `config`, `update` and `help` are
+reserved and can't be used as app names. An app registered under one of them
+before it was reserved can still be renamed with
+`aidev rename <old-name> <new-name>`.)
+
+### Per-app options
+
+An app that always needs the same extra domains or directories can have them
+applied on every launch:
+
+```bash
+aidev config MyApp      # or 'aidev config' to pick the app
+```
+
+This opens the app's options in an editor, starting from a commented
+template. When you save and close it, AiDev checks the file. If a line is
+wrong, it tells you which and why, and lets you edit again or discard the
+change. To clear the options, comment the settings out or leave them empty.
+
+The file is `~/.config/aidev/apps/<app-name>.conf`, and you can also edit it
+directly:
+
+```ini
+# Domains the container may reach, on top of claude-docker's allowlist.
+allow_domains = .example.com, .example.org
+
+# Directories to mount alongside the app. Relative paths are relative to
+# the app directory, and a path may start with ~/ for your home directory.
+add_dir = ../shared-lib
+add_dir = ~/data/reference
+```
+
+Both keys can be repeated, and comments go on lines of their own. The
+domains are added to any `CLAUDE_DOCKER_ALLOW_DOMAINS` already set, and each
+directory becomes an `--add-dir` for `claude-docker`. An unknown key, a
+malformed domain or a missing directory stops the launch; a key left empty
+is ignored. `rename` and `remove` take the file along.
+
+The editor is the one in `VISUAL` or `EDITOR`, otherwise VS Code if it is
+installed (close the file's tab when you are done), then `nano` (save with
+Ctrl+O and Enter, exit with Ctrl+X), then `vi`.
+
+Apps with options are marked in the app list, and AiDev shows what it
+applies when it starts one:
+
+```text
+> AiDev      [has config]  /home/you/code/aidev
+  MyApp                    /home/you/code/myapp
+```
+
+```text
+Options from /home/you/.config/aidev/apps/AiDev.conf (change with 'aidev config AiDev'):
+  allow domains: .example.com, .example.org
+  add dir:       /home/you/code/shared-lib
+  add dir:       /home/you/data/reference
+```
 
 ## Staying up to date
 

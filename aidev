@@ -5,6 +5,7 @@
 # Usage: aidev <app-name> [-r|--resume [session-id]] [-- claude-docker-args...]
 # Config: ${XDG_CONFIG_HOME:-~/.config}/aidev/apps.conf
 #         one entry per line, format: name=/absolute/path
+#         Per-app options, optional: .../aidev/apps/<app-name>.conf
 
 set -euo pipefail
 
@@ -12,6 +13,8 @@ CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/aidev"
 CONFIG_FILE="$CONFIG_DIR/apps.conf"
 USAGE_FILE="$CONFIG_DIR/usage.conf"
 UPDATE_FILE="$CONFIG_DIR/update.conf"
+# Optional per-app options (extra domains, extra directories): <name>.conf
+APP_OPTIONS_DIR="$CONFIG_DIR/apps"
 DOCKER_WAIT_SECONDS=120
 UPDATE_CHECK_INTERVAL=86400  # seconds between background update checks (24h)
 # How deep below a known project location to look for candidate directories
@@ -86,6 +89,11 @@ Usage:
                             Rename a registered app, keeping its directory.
                             With no old-name, shows the interactive picker;
                             with no new-name, prompts for one.
+  aidev config [app-name]   Create, change or clear an app's options (extra
+                            domains and directories) in an editor. With no
+                            name, shows the interactive picker. Checked
+                            before saving; comment out or empty every
+                            setting to clear.
   aidev update              Update aidev itself to the latest origin/main
                             (fast-forward only; refuses if the checkout has
                             uncommitted changes or has diverged).
@@ -94,15 +102,29 @@ Usage:
 Config file: $CONFIG_FILE
   Format:    one 'name=/absolute/path' entry per line.
 
+Per-app options (optional, edit with 'aidev config'):
+                     $APP_OPTIONS_DIR/<app-name>.conf
+  allow_domains = .example.com, .example.org
+                        Extra domains the container may reach; added to
+                        CLAUDE_DOCKER_ALLOW_DOMAINS.
+  add_dir = ../shared-lib
+                        Extra directory to mount, passed on as --add-dir.
+                        Relative paths are relative to the app directory.
+  Both keys may be repeated, and a key left empty is ignored. Lines
+  starting with '#' are comments.
+
 Environment:
+  VISUAL, EDITOR        Editor for 'aidev config'. If neither is set, VS Code
+                        ('code --wait') is used when installed, else nano,
+                        else vi.
   AIDEV_SUGGEST_DEPTH   How deep to look for directory suggestions when
                         registering an app (default 2; 1 = siblings only).
   AIDEV_SUGGEST_DEBUG   Set to 1 to trace that search on stderr: which
                         folders were looked at and why each was offered
                         or held back.
 
-Note: 'remove', 'rename', 'update' and 'help' are reserved and cannot be
-      used as app names.
+Note: 'remove', 'rename', 'config', 'update' and 'help' are reserved and
+      cannot be used as app names.
 EOF
     exit "${1:-1}"
 }
@@ -290,7 +312,7 @@ validate_app_name() {
         ''|*=*|*/*|*[[:space:]]*) die "Invalid app name: '$name'" ;;
     esac
     case "${name,,}" in
-        remove|rename|update|help|-h|--help) die "'$name' is reserved and cannot be used as an app name." ;;
+        remove|rename|config|update|help|-h|--help) die "'$name' is reserved and cannot be used as an app name." ;;
     esac
 }
 
@@ -343,15 +365,30 @@ pick_app() {
     sorted="$(sorted_apps)"
     width="$(printf '%s\n' "$sorted" | awk -F= '{ if (length($1) > w) w = length($1) } END { print w }')"
 
+    # Apps whose options file sets something get a marker, in a column of
+    # its own so the markers line up. The column is left out altogether
+    # when no app has one, so the list looks as it always did.
+    local names=() paths=() marks=() rows=() n p f i mark_fmt=""
+    while IFS='=' read -r n p; do
+        names+=("$n")
+        paths+=("$p")
+        f="$(find_app_options "$n")"
+        if [ -n "$f" ] && has_app_options "$f"; then
+            marks+=("[has config]")
+            mark_fmt="%-12s  "
+        else
+            marks+=("")
+        fi
+    done <<< "$sorted"
+    for (( i=0; i<${#names[@]}; i++ )); do
+        rows+=("$(printf "%-*s  ${mark_fmt}%s" "$width" "${names[i]}" \
+            ${mark_fmt:+"${marks[i]}"} "${paths[i]}")")
+    done
+
     if command -v fzf >/dev/null 2>&1; then
         local line
         line="$(
-            printf '%s\n' "$sorted" \
-            | awk -F= -v w="$width" '{
-                name = $1
-                sub(/^[^=]*=/, "")
-                printf "%-*s  %s\n", w, name, $0
-            }' \
+            printf '%s\n' "${rows[@]}" \
             | fzf --prompt='aidev > ' "${FZF_OPTS[@]}"
         )" || die "Aborted."
         [ -n "$line" ] || die "Aborted."
@@ -361,16 +398,12 @@ pick_app() {
         return
     fi
 
-    local names=() paths=() count i choice
-    while IFS='=' read -r n p; do
-        names+=("$n")
-        paths+=("$p")
-    done <<< "$sorted"
+    local count choice
     count=${#names[@]}
 
     echo "Registered apps:" >&2
     for (( i=0; i<count; i++ )); do
-        printf "  %d) %-*s  %s\n" "$((i+1))" "$width" "${names[i]}" "${paths[i]}" >&2
+        printf "  %d) %s\n" "$((i+1))" "${rows[i]}" >&2
     done
 
     printf "Pick app [1-%d] (q to quit): " "$count" >&2
@@ -614,7 +647,11 @@ remove_app() {
     [ -n "$canon" ] || die "App '$name' is not registered."
     path="$(lookup_app "$name")"
 
-    printf "Remove '%s' (%s)? [y/N] " "$canon" "$path"
+    local options
+    options="$(find_app_options "$canon")"
+    printf "Remove '%s' (%s)?" "$canon" "$path"
+    [ -z "$options" ] || printf " This also deletes its options file %s." "$options"
+    printf " [y/N] "
     read -r ans
     case "${ans:-N}" in
         [Yy]*) ;;
@@ -630,6 +667,8 @@ remove_app() {
         awk -F= -v key="$name" 'tolower($1) != tolower(key)' "$USAGE_FILE" > "$tmp"
         mv "$tmp" "$USAGE_FILE"
     fi
+
+    [ -z "$options" ] || rm -f -- "$options"
 
     printf "Removed: %s\n" "$canon"
 }
@@ -673,7 +712,208 @@ rename_app() {
         mv "$tmp" "$USAGE_FILE"
     fi
 
+    # Take the app's options file along, case-only renames included.
+    local options
+    options="$(find_app_options "$canon")"
+    if [ -n "$options" ] && [ "$options" != "$APP_OPTIONS_DIR/$new.conf" ]; then
+        mv "$options" "$APP_OPTIONS_DIR/$new.conf"
+    fi
+
     printf "Renamed: %s -> %s\n" "$canon" "$new"
+}
+
+find_app_options() {
+    # Echoes the path of the app's options file, if there is one. Matched
+    # case-insensitively, like app names everywhere else.
+    local name="$1" file base
+    [ -d "$APP_OPTIONS_DIR" ] || return 0
+    for file in "$APP_OPTIONS_DIR"/*.conf; do
+        [ -f "$file" ] || continue
+        base="${file##*/}"
+        base="${base%.conf}"
+        if [ "${base,,}" = "${name,,}" ]; then
+            printf '%s\n' "$file"
+            return 0
+        fi
+    done
+}
+
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+
+load_app_options() {
+    # Reads the app's options file, if any, into APP_DOMAINS and APP_DIRS.
+    local name="$1" app_dir="$2" file
+    APP_OPTIONS_FILE=""
+    APP_DOMAINS=()
+    APP_DIRS=()
+
+    file="$(find_app_options "$name")"
+    [ -n "$file" ] || return 0
+    APP_OPTIONS_FILE="$file"
+    parse_app_options "$file" "$app_dir" "$file"
+}
+
+parse_app_options() {
+    # Parses <src> into APP_DOMAINS and APP_DIRS. Errors name <file>
+    # instead, so a draft being edited reports the real options file.
+    # Strict on purpose: these settings widen what the container can reach,
+    # so a typo should stop the launch rather than be quietly ignored.
+    # Usage: parse_app_options <src> <app-dir> <file>
+    local src="$1" app_dir="$2" file="$3" line key value item dir lineno=0
+    local -a items
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        lineno=$((lineno + 1))
+        line="$(trim "${line%$'\r'}")"
+        case "$line" in
+            ''|'#'*) continue ;;
+            *=*) ;;
+            *) die "$file:$lineno: expected 'key = value', got: $line" ;;
+        esac
+        key="$(trim "${line%%=*}")"
+        value="$(trim "${line#*=}")"
+        # A known key left empty is simply not set: emptying a value is how
+        # people clear it, and it widens nothing, so there is no typo to stop.
+        if [ -z "$value" ]; then
+            case "$key" in allow_domains|add_dir) continue ;; esac
+        fi
+
+        case "$key" in
+            allow_domains)
+                IFS=', ' read -r -a items <<< "$value"
+                for item in ${items[@]+"${items[@]}"}; do
+                    [[ "$item" =~ ^\.?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$ ]] \
+                        || die "$file:$lineno: not a domain: '$item'"
+                    APP_DOMAINS+=("$item")
+                done
+                ;;
+            add_dir)
+                dir="$value"
+                case "$dir" in
+                    '~') dir="$HOME" ;;
+                    '~/'*) dir="$HOME/${dir#'~/'}" ;;
+                    /*) ;;
+                    *) dir="$app_dir/$dir" ;;
+                esac
+                [ -d "$dir" ] || die "$file:$lineno: directory not found: $value"
+                APP_DIRS+=("$(cd "$dir" && pwd)")
+                ;;
+            *) die "$file:$lineno: unknown option '$key' (expected allow_domains or add_dir)" ;;
+        esac
+    done < "$src"
+}
+
+has_app_options() {
+    # True if the file sets anything: a line that is not blank, a comment
+    # or a key left empty.
+    grep -qvE '^[[:space:]]*(#.*|[^#=]*=[[:space:]]*)?$' "$1"
+}
+
+app_options_template() {
+    local name="$1" path="$2"
+    cat <<EOF
+# aidev options for $name ($path)
+# Applied every time 'aidev $name' starts. Remove the '#' in front of a
+# setting to use it. Save and close the editor when you are done. To have
+# no options, comment the settings out again or leave them empty.
+#
+# Extra domains the container may reach, separated by commas or spaces.
+# A leading dot includes all subdomains:
+# allow_domains = .example.com, .example.org
+#
+# Extra directories to mount, one per line. Relative paths are relative to
+# the app directory, and a path may start with ~/ for your home directory:
+# add_dir = ../shared-lib
+# add_dir = ~/data/reference
+EOF
+}
+
+pick_editor() {
+    # Echoes the editor command. VS Code before nano: most aidev users come
+    # from Windows and know it already. '--wait' makes it block until the
+    # file's tab is closed, which is what lets us check the result.
+    if [ -n "${VISUAL:-}" ]; then
+        printf '%s\n' "$VISUAL"
+    elif [ -n "${EDITOR:-}" ]; then
+        printf '%s\n' "$EDITOR"
+    elif command -v code >/dev/null 2>&1; then
+        printf '%s\n' "code --wait"
+    elif command -v nano >/dev/null 2>&1; then
+        printf '%s\n' nano
+    elif command -v vi >/dev/null 2>&1; then
+        printf '%s\n' vi
+    else
+        die "No editor found. Set EDITOR, e.g. 'EDITOR=nano aidev config <app-name>'."
+    fi
+}
+
+config_app() {
+    local name="$1" canon path file target workdir draft ans errors
+    local -a editor
+    validate_app_name "$name"
+    ensure_config
+
+    canon="$(canonical_name "$name")"
+    [ -n "$canon" ] || die "App '$name' is not registered."
+    path="$(lookup_app "$name")"
+
+    file="$(find_app_options "$canon")"
+    target="${file:-$APP_OPTIONS_DIR/$canon.conf}"
+
+    # Edit a draft, never the file itself: it only replaces the real one
+    # once it passes the same checks as at launch, so a typo can't end up
+    # blocking the next start. A directory rather than a file from mktemp,
+    # so the draft keeps a readable name (and a .conf suffix) everywhere.
+    workdir="$(mktemp -d "${TMPDIR:-/tmp}/aidev-config.XXXXXX")"
+    trap "rm -rf -- '$workdir'" EXIT
+    draft="$workdir/$canon.conf"
+    if [ -n "$file" ]; then
+        cp "$file" "$draft"
+    else
+        app_options_template "$canon" "$path" > "$draft"
+    fi
+    cp "$draft" "$workdir/original"
+
+    read -r -a editor <<< "$(pick_editor)"
+    case "${editor[0]##*/}" in
+        nano) echo "Opening in nano: save with Ctrl+O then Enter, exit with Ctrl+X." ;;
+        code) echo "Opening in VS Code: save, then close the file's tab to continue." ;;
+    esac
+
+    while :; do
+        "${editor[@]}" "$draft" || die "The editor reported an error; $target is unchanged."
+        if errors="$( (parse_app_options "$draft" "$path" "$target") 2>&1 >/dev/null )"; then
+            break
+        fi
+        printf '%s\n' "$errors" >&2
+        read -r -p "Edit again? [Y/n] " ans
+        case "${ans:-Y}" in
+            [Yy]*) ;;
+            *) die "Discarded; $target is unchanged." ;;
+        esac
+    done
+
+    if cmp -s "$draft" "$workdir/original"; then
+        if [ -n "$file" ]; then
+            echo "No changes to $target."
+        else
+            echo "No options set for $canon."
+        fi
+    elif has_app_options "$draft"; then
+        mkdir -p "$APP_OPTIONS_DIR"
+        cp "$draft" "$target"
+        echo "Saved $target."
+    elif [ -n "$file" ]; then
+        rm -f -- "$file"
+        echo "Removed $file; $canon has no options now."
+    else
+        echo "No options set for $canon."
+    fi
 }
 
 docker_ready() {
@@ -777,6 +1017,16 @@ main() {
             rename_app "$old" "$new"
             return
             ;;
+        config)
+            local target
+            case $# in
+                1) target="$(pick_app)" ;;
+                2) target="$2" ;;
+                *) die "Usage: aidev config [app-name]" ;;
+            esac
+            config_app "$target"
+            return
+            ;;
         update)
             [ $# -eq 1 ] || die "Usage: aidev update"
             cmd_update
@@ -828,6 +1078,8 @@ main() {
         newly_registered=1
     fi
     [ -d "$path" ] || die "Configured directory missing for '$name': $path"
+    # Read before starting Docker, so a broken options file fails fast.
+    load_app_options "$name" "$path"
 
     if [ "$newly_registered" -eq 1 ]; then
         local run_now
@@ -842,8 +1094,30 @@ main() {
 
     record_usage "$(canonical_name "$name")"
 
+    # A file whose keys are all empty sets nothing, so there is nothing to show.
+    if [ "${#APP_DOMAINS[@]}" -gt 0 ] || [ "${#APP_DIRS[@]}" -gt 0 ]; then
+        echo "Options from $APP_OPTIONS_FILE (change with 'aidev config $(canonical_name "$name")'):"
+        local item joined
+        if [ "${#APP_DOMAINS[@]}" -gt 0 ]; then
+            joined="$(IFS=,; printf '%s' "${APP_DOMAINS[*]}")"
+            echo "  allow domains: ${joined//,/, }"
+            # Add to, rather than replace, any domains given on the command line.
+            export CLAUDE_DOCKER_ALLOW_DOMAINS="${CLAUDE_DOCKER_ALLOW_DOMAINS:+$CLAUDE_DOCKER_ALLOW_DOMAINS,}$joined"
+        fi
+        for item in ${APP_DIRS[@]+"${APP_DIRS[@]}"}; do
+            echo "  add dir:       $item"
+        done
+    fi
+
     cd "$path"
     local -a cmd=(claude-docker)
+    local dir
+    # The '=' form takes exactly one path. claude-docker's plain --add-dir
+    # takes every argument up to the next flag, so it would swallow a
+    # following 'bash' or prompt given after '--'.
+    for dir in ${APP_DIRS[@]+"${APP_DIRS[@]}"}; do
+        cmd+=("--add-dir=$dir")
+    done
     if [ "$resume" -eq 1 ]; then
         cmd+=(--resume)
         [ -z "$session" ] || cmd+=("$session")
