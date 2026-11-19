@@ -6,58 +6,21 @@
 aidev MyApp
 ```
 
-That single command starts Docker if it isn't running, `cd`s into the
-project directory registered for `MyApp`, and launches
-[`claude-docker`](https://github.com/Arkitektum/claude-docker) there — no
-more "which folder was that again?" or "is Docker up?".
-
-## Why
-
-- **Remembers your projects by name** — register each app once, then launch
-  it from anywhere by name.
-- **Starts Docker for you** — works on WSL2 (Docker Desktop on Windows),
-  native Linux (Docker Desktop *or* Docker Engine) and macOS (Docker
-  Desktop), picking the right daemon automatically.
-- **Interactive picker** — forget the name? Run `aidev` with no arguments and
-  pick from a list (with fuzzy search if you have `fzf`):
-
-  ```text
-    aidev >
-    3/3 ──────────────────────────────────────────
-    Type to filter | Up/Down to scroll | Enter to select
-  > aidev      /home/you/code/aidev
-    MyApp      /home/you/code/myapp
-    MyWebSite  /home/you/code/webportal
-  ```
-  Start typing to fuzzy-filter; arrow keys move the `>` cursor; Enter launches
-  the highlighted app. Apps are ordered most-recently-used first. The `3/3`
-  counter is matches out of total — when it reads more than the rows on
-  screen, the list scrolls. Without `fzf`, you get a numbered list to pick
-  from instead.
-- **Resume sessions** — jump back into a previous Claude session with `-r`.
+starts Docker if it isn't running, `cd`s into the directory registered for
+`MyApp`, and launches
+[`claude-docker`](https://github.com/Arkitektum/claude-docker) there.
 
 ## Prerequisites
 
 - [`claude-docker`](https://github.com/Arkitektum/claude-docker) on your
-  `PATH` — AiDev is a wrapper around it (it runs Claude Code in a Docker
-  container with restricted network access).
-- **Docker** — Docker Desktop on WSL2 or macOS, Docker Desktop / Docker
-  Engine on native Linux. AiDev starts it for you, but it must be installed.
-- **bash 4 or newer.** Linux and WSL2 have this already. **macOS ships bash
-  3.2** as `/bin/bash` and will not move off it, so a Mac needs a current
-  bash alongside it:
-
-  ```bash
-  brew install bash
-  ```
-
-  Nothing else changes: Homebrew installs it beside the system one rather
-  than replacing it, your login shell stays whatever it is (zsh, normally),
-  and `aidev` hands over to the newer bash by itself when started by 3.2.
-  The installer checks for this and offers to run the command for you.
-- [`fzf`](https://github.com/junegunn/fzf) *(optional)* — enables arrow keys
-  and fuzzy search in the picker. Without it, a numbered fallback is used.
-  The installer can set this up for you.
+  `PATH`.
+- **Docker** — Docker Desktop on WSL2 or macOS, Docker Desktop or Docker
+  Engine on native Linux. AiDev starts it; it must be installed.
+- **bash 4 or newer.** macOS ships bash 3.2, so a Mac needs
+  `brew install bash`. It installs beside the system bash, your login shell
+  stays as it is, and `aidev` switches to the newer bash by itself.
+- [`fzf`](https://github.com/junegunn/fzf) *(optional)* — arrow keys and
+  fuzzy search in the pickers. Without it you get a numbered list.
 
 ## Install
 
@@ -65,237 +28,121 @@ more "which folder was that again?" or "is Docker up?".
 ./install.sh
 ```
 
-The installer symlinks `aidev` into `~/.local/bin` and then sorts out the
-rest, asking before it changes anything:
+This symlinks `aidev` into `~/.local/bin`. Asking first each time, it also
+offers to install a newer bash (macOS), to add `~/.local/bin` to your `PATH`
+in your shell's startup file, and to install `fzf`.
 
-- checks that a bash 4+ is present, and offers `brew install bash` on macOS
-  if it is not;
-- if `~/.local/bin` isn't on your `PATH`, offers to add the line that fixes
-  it to your shell's startup file — `~/.zshrc` for zsh, `~/.bashrc` for bash
-  (`~/.bash_profile` on macOS, where Terminal starts login shells);
-- offers to install `fzf`, via `brew` on macOS and `apt` elsewhere.
+Manual alternative: `ln -s "$PWD/aidev" ~/.local/bin/aidev`.
 
-Manual alternative:
+## Usage
 
-```bash
-mkdir -p ~/.local/bin
-ln -s "$PWD/aidev" ~/.local/bin/aidev
-```
+| Command | What it does |
+| --- | --- |
+| `aidev` | Pick an app from the list, then launch it. |
+| `aidev MyApp` | Launch `MyApp`; offers to register it if unknown. |
+| `aidev MyApp -r` | Launch `MyApp` and pick a previous session to resume. |
+| `aidev MyApp -r <session-id>` | Resume that session directly. |
+| `aidev -r` | Pick an app, then pick one of its sessions. |
+| `aidev MyApp -- <args>` | Pass `<args>` on to `claude-docker`. |
+| `aidev remove [app]` | Remove an app (no name → picker). |
+| `aidev rename [old [new]]` | Rename an app, keeping its directory. |
+| `aidev config [app]` | Edit the app's extra domains and directories. |
+| `aidev update` | Fast-forward aidev to the latest `origin/main`. |
+| `aidev -h` | Help. |
 
-## Quick start
+For `-r <session-id>` the app name must come first: `aidev -r MyApp` picks
+a session for `MyApp`.
 
-The first time you launch an unregistered app, AiDev walks you through setup:
+The app list is ordered most recently used first. In the `fzf` picker, type
+to filter and use the arrow keys; the counter (`3/10`) shows matches out of
+total, and the list scrolls when there are more than fit.
+
+### Registering an app
+
+The first launch of an unknown name registers it:
 
 ```text
 $ aidev MyApp
 App 'MyApp' is not registered.
 Register it now? [Y/n] y
-dir for 'MyApp' >            # pick a suggested directory, or enter a path
+dir for 'MyApp' >            # pick a suggestion, or enter a path
 Registered: MyApp -> /home/you/code/myapp
 Run claude-docker now? [Y/n] y
-Starting Docker Desktop...
-Docker is ready.
-Running claude-docker in /home/you/code/myapp
 ```
 
-The directory suggestions are the unregistered folders around apps you've
-already registered — the folders next to them, each with its own subfolders
-listed right underneath, most-used location first — so after your first app
-or two, registering the next is usually a single keypress. If you keep repos
-grouped under an org or client folder, that nesting is covered too:
+The suggestions are unregistered folders near the apps you already have:
+their siblings and, two levels down, the subfolders of those. Inside a folder
+that is a project of its own (`.git`, `package.json`, `pom.xml`, `*.sln`, …)
+only sub-projects are offered, and build output such as `node_modules` is
+skipped. Folders inside a registered app are still offered, so you can
+register an app suite as one app and its apps individually.
 
-```text
-/home/you/code/Arkitektum
-/home/you/code/Arkitektum/RepoB
-/home/you/code/Personal
-/home/you/code/Personal/Toy
-```
-
-The search stays out of the way: inside a folder that is a project of its own
-(it has `.git`, `package.json`, a `pom.xml`, a `.sln`, ...) only sub-projects
-are offered, so a repo's `src/` and `docs/` stay out of the list while an app
-suite kept in a single repo — or a monorepo's packages — still shows up. Build
-noise like `node_modules` is skipped outright. Set `AIDEV_SUGGEST_DEPTH` to
-change how deep it looks (default `2`; `1` = siblings only).
-
-Registering a folder does not close it off. If you register an app suite as
-one app — handy when you want a session that can read across all of it — the
-apps inside it stay on offer, so you can register them individually too:
-
-```text
-/home/you/code/IKA_Kongsberg/IKA_Innsyn/IKA_Innsyn_Cosdoc
-/home/you/code/IKA_Kongsberg/IKA_Innsyn/IKA_Innsyn_Gerica
-...
-```
-
-Registering the *first* app of a deeper layout — say `customer/appsuite/app`,
-three levels below anything you have registered so far — reaches past that
-default. Raise it for that one run:
-
-```bash
-AIDEV_SUGGEST_DEPTH=3 aidev MyApp
-```
-
-You only need that once per location: once one app in the suite is
-registered, its siblings show up like any other candidate.
-
-If a folder you expected is missing from the list, `AIDEV_SUGGEST_DEBUG=1`
-makes the search explain itself on stderr — which folders it looked at, and
-why each was offered or held back. Keep a copy, since the picker draws over
-the terminal:
-
-```bash
-AIDEV_SUGGEST_DEBUG=1 aidev MyApp 2> >(tee /tmp/aidev-suggest.log >&2)
-```
-
-Copy rather than redirect: prompts share that stream, so a plain
-`2>/tmp/aidev-suggest.log` hides the `Register it now?` question — and the
-whole list, if you are on the numbered picker rather than `fzf`.
-
-From then on, `aidev MyApp` takes you straight in.
-
-## Usage
-
-```text
-aidev [-r]                    # interactive picker
-aidev <app-name> [-r]         # start Docker if needed, cd to the app, run claude-docker
-aidev <app-name> -- <args>    # ...and pass <args> on to claude-docker
-aidev remove [app-name]       # remove an app (no name → picker)
-aidev rename [old [new]]      # rename an app, keeping its directory
-aidev config [app-name]       # edit an app's extra domains and directories
-aidev update                  # fast-forward aidev itself to the latest origin/main
-aidev -h                      # help
-```
-
-Examples:
-
-| Command | What it does |
-| --- | --- |
-| `aidev` | Pick an app from the list, then launch it. |
-| `aidev MyApp` | Launch `MyApp` (prompts to register if unknown). |
-| `aidev MyApp -r` | Launch `MyApp` and pick a previous Claude session to resume. |
-| `aidev MyApp -r <session-id>` | Resume that specific session directly. |
-| `aidev -r` | Pick an app, then resume one of its sessions. |
-| `aidev MyApp -- --add-dir ../lib` | Launch `MyApp` with an extra directory mounted. |
-| `aidev remove` | Pick an app to remove from the config. |
-| `aidev rename MyApp NewName` | Rename `MyApp` to `NewName`, keeping its directory. |
-| `aidev rename` | Pick an app, then enter its new name. |
-| `aidev config MyApp` | Edit the domains and directories `MyApp` always gets. |
-| `aidev update` | Fast-forward aidev itself to the latest `origin/main`. |
-
-> **Note:** for `-r <session-id>`, the app name must come *before* `-r`.
-> `aidev -r MyApp` treats `MyApp` as the app for the picker, not as a session id.
+- `AIDEV_SUGGEST_DEPTH=3 aidev MyApp` looks one level deeper, e.g. for the
+  first app of a `client/suite/app` layout. Once one app there is
+  registered, its siblings are suggested without it.
+- `AIDEV_SUGGEST_DEBUG=1` explains on stderr which folders were looked at
+  and why each was offered or held back. Use `2> >(tee aidev.log >&2)` to
+  keep a copy; a plain `2>` redirect would hide the prompts too.
 
 ### Passing options on to claude-docker
 
-Everything after `--` goes to `claude-docker` unchanged, so any option it
-supports is available without AiDev having to know about it:
+Everything after `--` goes to `claude-docker` unchanged. It runs in the
+app's directory, so relative paths are relative to the app:
 
 ```bash
 aidev MyApp -- --add-dir ../shared-lib   # mount another directory
-aidev MyApp -- bash                      # a shell in the container instead
+aidev MyApp -- bash                      # a shell in the container
 aidev MyApp -- --rebuild                 # rebuild the image first
 ```
 
-`claude-docker` runs in the app's directory, so a relative path is relative
-to the app, not to wherever you typed the command.
-
-Environment variables reach `claude-docker` as they are, for example to let
-the container reach a few more domains for one session:
-
-```bash
-CLAUDE_DOCKER_ALLOW_DOMAINS=".example.com,.example.org" aidev MyApp
-```
-
-## How it works
-
-On WSL2, AiDev starts Docker Desktop on the Windows side via
-`docker.exe desktop start`.
-
-On native Linux, the active Docker context (`docker context show`) decides
-which daemon to start: `desktop-linux` starts Docker Desktop's user service,
-anything else starts the `docker` system service via `sudo systemctl`.
-
-On macOS, AiDev launches Docker Desktop with `open -ga Docker`, which leaves
-the focus where it is rather than pulling the app to the front.
-
-Whichever it is, AiDev waits until Docker is ready (up to 120s) before
-launching `claude-docker`.
+Environment variables also pass through, for example
+`CLAUDE_DOCKER_ALLOW_DOMAINS=".example.com" aidev MyApp`.
 
 ## Config
 
-`~/.config/aidev/apps.conf` — one `name=/absolute/path` entry per line; safe
-to edit by hand. (`remove`, `rename`, `config`, `update` and `help` are
-reserved and can't be used as app names. An app registered under one of them
-before it was reserved can still be renamed with
-`aidev rename <old-name> <new-name>`.)
+`~/.config/aidev/apps.conf` holds one `name=/absolute/path` per line and can
+be edited by hand. `remove`, `rename`, `config`, `update` and `help` are
+reserved names.
 
 ### Per-app options
 
-An app that always needs the same extra domains or directories can have them
-applied on every launch:
-
-```bash
-aidev config MyApp      # or 'aidev config' to pick the app
-```
-
-This opens the app's options in an editor, starting from a commented
-template. When you save and close it, AiDev checks the file. If a line is
-wrong, it tells you which and why, and lets you edit again or discard the
-change. To clear the options, comment the settings out or leave them empty.
-
-The file is `~/.config/aidev/apps/<app-name>.conf`, and you can also edit it
-directly:
+`aidev config MyApp` opens `~/.config/aidev/apps/MyApp.conf` in an editor,
+for domains and directories the app gets on every launch:
 
 ```ini
 # Domains the container may reach, on top of claude-docker's allowlist.
 allow_domains = .example.com, .example.org
 
-# Directories to mount alongside the app. Relative paths are relative to
-# the app directory, and a path may start with ~/ for your home directory.
+# Directories to mount. Relative paths are relative to the app directory.
 add_dir = ../shared-lib
 add_dir = ~/data/reference
 ```
 
-Both keys can be repeated, and comments go on lines of their own. The
-domains are added to any `CLAUDE_DOCKER_ALLOW_DOMAINS` already set, and each
-directory becomes an `--add-dir` for `claude-docker`. An unknown key, a
-malformed domain or a missing directory stops the launch; a key left empty
-is ignored. `rename` and `remove` take the file along.
+Both keys can be repeated; comments go on lines of their own. The file is
+checked when you save it and at every launch: an unknown key, a malformed
+domain or a missing directory stops the launch, and after an edit AiDev
+says what is wrong and lets you edit again or discard. To clear the options,
+comment the settings out or leave them empty.
 
-The editor is the one in `VISUAL` or `EDITOR`, otherwise VS Code if it is
-installed (close the file's tab when you are done), then `nano` (save with
-Ctrl+O and Enter, exit with Ctrl+X), then `vi`.
+The editor is `VISUAL` or `EDITOR` if set, otherwise VS Code (close the tab
+when done), `nano` or `vi`. Apps with options are marked `[has config]` in
+the list, and AiDev prints the options it applies at launch.
 
-Apps with options are marked in the app list, and AiDev shows what it
-applies when it starts one:
+## How Docker is started
 
-```text
-> AiDev      [has config]  /home/you/code/aidev
-  MyApp                    /home/you/code/myapp
-```
+- **WSL2:** `docker.exe desktop start` on the Windows side.
+- **Linux:** by the active `docker context` — `desktop-linux` starts Docker
+  Desktop's user service, anything else `sudo systemctl start docker`.
+- **macOS:** `open -ga Docker`, without stealing focus.
 
-```text
-Options from /home/you/.config/aidev/apps/AiDev.conf (change with 'aidev config AiDev'):
-  allow domains: .example.com, .example.org
-  add dir:       /home/you/code/shared-lib
-  add dir:       /home/you/data/reference
-```
+AiDev then waits up to 120 seconds for Docker to be ready.
 
-## Staying up to date
+## Updates
 
-When the checkout is on `main`, aidev quietly checks `origin/main` in the
-background (at most once a day) and prints a one-line nudge on startup when
-new commits are available:
-
-```
-aidev: update available — 2 commits behind origin/main. Run 'aidev update'.
-```
-
-`aidev update` fast-forwards the checkout (`git pull --ff-only`). It refuses
-if the working tree has uncommitted changes or the history has diverged,
-leaving you to resolve those manually. Because aidev is installed as a
-symlink, the update takes effect on the next run — no reinstall needed.
+On `main`, aidev checks `origin/main` in the background at most once a day
+and tells you when new commits are available. `aidev update` fast-forwards
+the checkout; it refuses if you have uncommitted changes or the history has
+diverged. The symlink means the update applies on the next run.
 
 ---
 
