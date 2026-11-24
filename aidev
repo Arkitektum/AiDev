@@ -928,6 +928,40 @@ is_macos() {
     [ "$(uname -s)" = Darwin ]
 }
 
+# Why docker.exe is not on PATH under WSL, as indented lines for the error
+# message. WSL appends Windows' PATH to its own, and Docker Desktop's
+# installer puts its bin directory on Windows' PATH; say which link is
+# missing, and whether Docker Desktop is at its default location at all.
+docker_exe_missing_reason() {
+    local dirs dir windows_path=""
+    IFS=: read -r -a dirs <<< "$PATH"
+    for dir in "${dirs[@]}"; do
+        case "${dir,,}" in
+            */windows/system32) windows_path=1 ;;
+        esac
+    done
+
+    if [ -z "$windows_path" ]; then
+        if grep -Eiqs '^[[:space:]]*appendWindowsPath[[:space:]]*=[[:space:]]*false' /etc/wsl.conf; then
+            echo "      Windows' PATH is not passed to WSL: /etc/wsl.conf sets appendWindowsPath = false."
+        else
+            echo "      PATH has no Windows directories, so Windows' PATH is not reaching WSL."
+            echo "      Check whether a shell startup file (~/.bashrc, ~/.profile) overwrites PATH."
+        fi
+    else
+        echo "      Windows' PATH reaches WSL, but has no Docker Desktop directory on it."
+    fi
+
+    local default='C:\Program Files\Docker\Docker\resources\bin\docker.exe' found
+    found="$(wslpath -u "$default" 2>/dev/null || true)"
+    if [ -n "$found" ] && [ -f "$found" ]; then
+        echo "      Docker Desktop is installed: $found exists."
+    else
+        echo "      No docker.exe at the default location ($default) either —"
+        echo "      is Docker Desktop installed on Windows?"
+    fi
+}
+
 start_docker() {
     if is_macos; then
         # Docker Desktop is the only Docker on macOS, and 'open' returns as
@@ -942,7 +976,8 @@ start_docker() {
 
     if is_wsl; then
         command -v docker.exe >/dev/null 2>&1 \
-            || die "docker.exe not found on PATH — is Docker Desktop installed on Windows?"
+            || die "docker.exe not found on PATH, so Docker Desktop cannot be started.
+$(docker_exe_missing_reason)"
         echo "Starting Docker Desktop..."
         docker.exe desktop start >/dev/null 2>&1 \
             || die "Failed to invoke 'docker.exe desktop start'."
