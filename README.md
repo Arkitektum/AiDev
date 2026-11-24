@@ -130,7 +130,8 @@ the list, and AiDev prints the options it applies at launch.
 
 ## How Docker is started
 
-- **WSL2:** `docker.exe desktop start` on the Windows side.
+- **WSL2:** `docker.exe desktop start` on the Windows side, using `docker.exe`
+  from PATH, else from Docker Desktop's default install folder.
 - **Linux:** by the active `docker context` — `desktop-linux` starts Docker
   Desktop's user service, anything else `sudo systemctl start docker`.
 - **macOS:** `open -ga Docker`, without stealing focus.

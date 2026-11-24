@@ -16,6 +16,9 @@ UPDATE_FILE="$CONFIG_DIR/update.conf"
 # Optional per-app options (extra domains, extra directories): <name>.conf
 APP_OPTIONS_DIR="$CONFIG_DIR/apps"
 DOCKER_WAIT_SECONDS=120
+# Where Docker Desktop's installer puts docker.exe; used under WSL when
+# docker.exe is not on PATH.
+DOCKER_EXE_DEFAULT='C:\Program Files\Docker\Docker\resources\bin\docker.exe'
 UPDATE_CHECK_INTERVAL=86400  # seconds between background update checks (24h)
 # How deep below a known project location to look for candidate directories
 # when registering a new app (1 = siblings only, 2 = also their subfolders).
@@ -931,7 +934,7 @@ is_macos() {
 # Why docker.exe is not on PATH under WSL, as indented lines for the error
 # message. WSL appends Windows' PATH to its own, and Docker Desktop's
 # installer puts its bin directory on Windows' PATH; say which link is
-# missing, and whether Docker Desktop is at its default location at all.
+# missing. Only called once the default location has been tried as well.
 docker_exe_missing_reason() {
     local dirs dir windows_path=""
     IFS=: read -r -a dirs <<< "$PATH"
@@ -952,14 +955,16 @@ docker_exe_missing_reason() {
         echo "      Windows' PATH reaches WSL, but has no Docker Desktop directory on it."
     fi
 
-    local default='C:\Program Files\Docker\Docker\resources\bin\docker.exe' found
-    found="$(wslpath -u "$default" 2>/dev/null || true)"
-    if [ -n "$found" ] && [ -f "$found" ]; then
-        echo "      Docker Desktop is installed: $found exists."
-    else
-        echo "      No docker.exe at the default location ($default) either —"
-        echo "      is Docker Desktop installed on Windows?"
-    fi
+    echo "      No docker.exe at the default location ($DOCKER_EXE_DEFAULT) either —"
+    echo "      is Docker Desktop installed on Windows?"
+}
+
+# docker.exe at Docker Desktop's default install location, if it is there.
+default_docker_exe() {
+    local exe
+    exe="$(wslpath -u "$DOCKER_EXE_DEFAULT" 2>/dev/null)" || return 1
+    [ -f "$exe" ] || return 1
+    printf '%s\n' "$exe"
 }
 
 start_docker() {
@@ -975,11 +980,17 @@ start_docker() {
     fi
 
     if is_wsl; then
-        command -v docker.exe >/dev/null 2>&1 \
-            || die "docker.exe not found on PATH, so Docker Desktop cannot be started.
+        # A Docker Desktop install whose directory never made it onto
+        # Windows' PATH still has docker.exe at the default location.
+        local docker_exe
+        if ! docker_exe="$(command -v docker.exe)"; then
+            docker_exe="$(default_docker_exe)" \
+                || die "docker.exe not found on PATH, so Docker Desktop cannot be started.
 $(docker_exe_missing_reason)"
+            echo "Note: docker.exe is not on PATH; using $docker_exe"
+        fi
         echo "Starting Docker Desktop..."
-        docker.exe desktop start >/dev/null 2>&1 \
+        "$docker_exe" desktop start >/dev/null 2>&1 \
             || die "Failed to invoke 'docker.exe desktop start'."
         return
     fi
