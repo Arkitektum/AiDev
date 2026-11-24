@@ -759,7 +759,21 @@ load_app_options() {
     file="$(find_app_options "$name")"
     [ -n "$file" ] || return 0
     APP_OPTIONS_FILE="$file"
-    parse_app_options "$file" "$app_dir" "$file"
+    parse_app_options "$file" "$app_dir" "$file" skip-missing
+
+    # A directory that no longer exists widens nothing, so it need not
+    # block the launch, but it may be a typo: ask rather than drop it
+    # silently. Without a terminal to ask on, stop as for other errors.
+    [ "${#APP_MISSING_DIRS[@]}" -gt 0 ] || return 0
+    printf 'aidev: %s\n' "${APP_MISSING_DIRS[@]}" >&2
+    [ -t 0 ] || exit 1
+    local ans it=it
+    [ "${#APP_MISSING_DIRS[@]}" -eq 1 ] || it=them
+    read -r -p "Start without $it? [Y/n] " ans
+    case "${ans:-Y}" in
+        [Yy]*) ;;
+        *) die "Not started. Change the directories with 'aidev config $(canonical_name "$name")'." ;;
+    esac
 }
 
 parse_app_options() {
@@ -767,9 +781,12 @@ parse_app_options() {
     # instead, so a draft being edited reports the real options file.
     # Strict on purpose: these settings widen what the container can reach,
     # so a typo should stop the launch rather than be quietly ignored.
-    # Usage: parse_app_options <src> <app-dir> <file>
-    local src="$1" app_dir="$2" file="$3" line key value item dir lineno=0
+    # With skip-missing, a directory that does not exist is collected in
+    # APP_MISSING_DIRS instead of stopping, for the caller to deal with.
+    # Usage: parse_app_options <src> <app-dir> <file> [skip-missing]
+    local src="$1" app_dir="$2" file="$3" mode="${4:-}" line key value item dir lineno=0
     local -a items
+    APP_MISSING_DIRS=()
 
     while IFS= read -r line || [ -n "$line" ]; do
         lineno=$((lineno + 1))
@@ -812,7 +829,12 @@ parse_app_options() {
                     /*) ;;
                     *) dir="$app_dir/$dir" ;;
                 esac
-                [ -d "$dir" ] || die "$file:$lineno: directory not found: $value"
+                if [ ! -d "$dir" ]; then
+                    [ "$mode" = skip-missing ] \
+                        || die "$file:$lineno: directory not found: $value"
+                    APP_MISSING_DIRS+=("$file:$lineno: directory not found: $value")
+                    continue
+                fi
                 APP_DIRS+=("$(cd "$dir" && pwd)")
                 ;;
             *) die "$file:$lineno: unknown option '$key' (expected allow_domains or add_dir)" ;;
@@ -867,7 +889,7 @@ pick_editor() {
 }
 
 config_app() {
-    local name="$1" canon path file target workdir draft ans errors
+    local name="$1" canon path file target workdir draft ans errors missing
     local -a editor
     validate_app_name "$name"
     ensure_config
@@ -901,9 +923,14 @@ config_app() {
 
     while :; do
         "${editor[@]}" "$draft" || die "The editor reported an error; $target is unchanged."
-        if errors="$( (parse_app_options "$draft" "$path" "$target") 2>&1 >/dev/null )"; then
+        # A missing directory does not block saving: it widens nothing, and
+        # the launch asks about it. Errors go to stderr, missing ones to stdout.
+        if missing="$( (parse_app_options "$draft" "$path" "$target" skip-missing
+                        printf '%s\n' ${APP_MISSING_DIRS[@]+"${APP_MISSING_DIRS[@]}"}) \
+                      2>"$workdir/errors" )"; then
             break
         fi
+        errors="$(cat "$workdir/errors")"
         printf '%s\n' "$errors" >&2
         read -r -p "Edit again? [Y/n] " ans
         case "${ans:-Y}" in
@@ -927,6 +954,14 @@ config_app() {
         echo "Removed $file; $canon has no options now."
     else
         echo "No options set for $canon."
+    fi
+
+    if [ -n "$missing" ]; then
+        local line
+        while IFS= read -r line; do
+            printf 'aidev: %s\n' "$line" >&2
+        done <<< "$missing"
+        echo "Launching with 'aidev $canon' will ask whether to start without it." >&2
     fi
 }
 

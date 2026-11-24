@@ -121,9 +121,10 @@ add_dir = C:\Users\you\Documents\reference
 ```
 
 Both keys can be repeated; comments go on lines of their own. The file is
-checked when you save it and at every launch: an unknown key, a malformed
-domain or a missing directory stops the launch, and after an edit AiDev
-says what is wrong and lets you edit again or discard. To clear the options,
+checked when you save it and at every launch: an unknown key or a malformed
+domain stops the launch, and a missing directory makes AiDev ask whether to
+start without it. After an edit, AiDev says what is wrong and lets you edit
+again or discard; a missing directory only gets a warning. To clear the options,
 comment the settings out or leave them empty.
 
 The editor is `VISUAL` or `EDITOR` if set, otherwise VS Code (close the tab
