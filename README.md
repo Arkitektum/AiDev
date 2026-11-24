@@ -113,9 +113,11 @@ for domains and directories the app gets on every launch:
 # Domains the container may reach, on top of claude-docker's allowlist.
 allow_domains = .example.com, .example.org
 
-# Directories to mount. Relative paths are relative to the app directory.
+# Directories to mount. Relative paths are relative to the app directory;
+# under WSL, Windows paths work too.
 add_dir = ../shared-lib
 add_dir = ~/data/reference
+add_dir = C:\Users\you\Documents\reference
 ```
 
 Both keys can be repeated; comments go on lines of their own. The file is

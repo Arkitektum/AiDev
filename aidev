@@ -113,6 +113,7 @@ Per-app options (optional, edit with 'aidev config'):
   add_dir = ../shared-lib
                         Extra directory to mount, passed on as --add-dir.
                         Relative paths are relative to the app directory.
+                        Under WSL, a Windows path (C:\...) also works.
   Both keys may be repeated, and a key left empty is ignored. Lines
   starting with '#' are comments.
 
@@ -797,6 +798,14 @@ parse_app_options() {
                 ;;
             add_dir)
                 dir="$value"
+                # Explorer's "Copy as path" wraps the path in double quotes.
+                case "$dir" in '"'?*'"') dir="${dir:1:${#dir}-2}" ;; esac
+                # Under WSL, accept Windows paths (C:\..., C:/..., \\server\...)
+                # and mount their WSL equivalent.
+                if is_wsl && [[ "$dir" =~ ^([A-Za-z]:[\\/]|\\\\) ]]; then
+                    dir="$(wslpath -u "$dir" 2>/dev/null)" && [ -n "$dir" ] \
+                        || die "$file:$lineno: cannot convert Windows path: $value"
+                fi
                 case "$dir" in
                     '~') dir="$HOME" ;;
                     '~/'*) dir="$HOME/${dir#'~/'}" ;;
@@ -830,9 +839,11 @@ app_options_template() {
 # allow_domains = .example.com, .example.org
 #
 # Extra directories to mount, one per line. Relative paths are relative to
-# the app directory, and a path may start with ~/ for your home directory:
+# the app directory, and a path may start with ~/ for your home directory.
+# Under WSL, a Windows path works too:
 # add_dir = ../shared-lib
 # add_dir = ~/data/reference
+# add_dir = C:\Users\you\Documents\reference
 EOF
 }
 
